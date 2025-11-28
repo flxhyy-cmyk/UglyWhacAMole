@@ -38,6 +38,7 @@ namespace WindowInspector
         private int _currentMoleGroupIndex = 0;
         private int _batchSelectSliderA = 1; // 保存滑块 A 的位置
         private int _batchSelectSliderB = 1; // 保存滑块 B 的位置
+        private Form? _currentEditDialog = null; // 当前打开的编辑窗口
         
         private const int HOTKEY_ID_F2 = 1;
         private const int HOTKEY_ID_F3 = 2;
@@ -484,17 +485,36 @@ namespace WindowInspector
             clearItem.Click += (s, e) =>
             {
                 var result = MessageBox.Show(
-                    "确定要清除当前配置吗？这将删除所有保存的文本和位置信息。",
+                    "确定要清除当前配置吗？这将删除所有保存的文本和位置信息，并删除配置文件。",
                     "确认清除",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
 
                 if (result == DialogResult.Yes)
                 {
+                    // 如果有命名配置，删除对应的配置文件
+                    if (!string.IsNullOrEmpty(_currentConfigName))
+                    {
+                        var configPath = Path.Combine(_configManager.ConfigsDirectory, _currentConfigName + ".json");
+                        try
+                        {
+                            if (File.Exists(configPath))
+                            {
+                                File.Delete(configPath);
+                                AppendLog($"✅ 已删除配置文件: {_currentConfigName}", LogType.Success);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog($"⚠️ 删除配置文件失败: {ex.Message}", LogType.Warning);
+                        }
+                    }
+                    
                     _config = new WindowConfig();
                     _targetWindow = IntPtr.Zero;
                     _currentConfigName = null;
                     UpdateTextCombo();
+                    UpdateCellGroupCombo();
                     SaveCurrentConfig();
                     AppendLog("✅ 配置已清除", LogType.Success);
                     btnRecordInput.Enabled = false;
@@ -2146,7 +2166,7 @@ namespace WindowInspector
             // 全部启用按钮
             var btnEnableAll = new Button
             {
-                Text = "启用 A-B 之间的步骤",
+                Text = "启用全部",
                 Location = new Point(70, 200),
                 Size = new Size(150, 35),
                 Parent = dialog
@@ -2161,14 +2181,13 @@ namespace WindowInspector
                 Parent = dialog
             };
             
-            // 启用按钮点击事件
+            // 启用全部按钮点击事件
             btnEnableAll.Click += (s, ev) =>
             {
-                int start = Math.Min(_batchSelectSliderA, _batchSelectSliderB) - 1; // 转换为索引
-                int end = Math.Max(_batchSelectSliderA, _batchSelectSliderB) - 1;
                 int count = 0;
                 
-                for (int i = start; i <= end && i < group.Moles.Count; i++)
+                // 启用所有步骤
+                for (int i = 0; i < group.Moles.Count; i++)
                 {
                     group.Moles[i].IsEnabled = true;
                     count++;
@@ -2176,7 +2195,7 @@ namespace WindowInspector
                 
                 SaveMoles();
                 RefreshCurrentMoleList();
-                AppendLog($"✅ 已启用步骤 {start + 1} 到 {end + 1}，共 {count} 个步骤", LogType.Success);
+                AppendLog($"✅ 已启用全部步骤，共 {count} 个", LogType.Success);
                 dialog.Close();
             };
             
@@ -2222,11 +2241,14 @@ namespace WindowInspector
             {
                 Text = "选择跳转目标",
                 Size = new Size(350, 280),
-                StartPosition = FormStartPosition.CenterParent,
+                StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
                 MinimizeBox = false
             };
+            
+            // 设置对话框位置：左边与主窗口右边对齐
+            form.Location = new Point(this.Right, this.Top + (this.Height - form.Height) / 2);
 
             var label1 = new Label
             {
@@ -2967,9 +2989,15 @@ namespace WindowInspector
             if (e.Button == MouseButtons.Right && sender is CheckedListBox lstMoles)
             {
                 var group = GetCurrentMoleGroup();
+                if (group == null) return;
+                
                 var index = lstMoles.IndexFromPoint(e.Location);
+                
                 if (index >= 0 && index < group.Moles.Count)
                 {
+                    // 右键点击了某个步骤，关闭当前编辑窗口并打开新的
+                    CloseCurrentEditDialog();
+                    
                     var mole = group.Moles[index];
                     
                     // 如果是跳转步骤，显示编辑对话框
@@ -2989,6 +3017,32 @@ namespace WindowInspector
                     // 创建自定义确认对话框，显示预览图（非模态）
                     ShowMoleDeleteConfirmDialog(mole, index);
                 }
+                else
+                {
+                    // 右键点击了空白处，关闭当前编辑窗口
+                    CloseCurrentEditDialog();
+                }
+            }
+        }
+        
+        private void CloseCurrentEditDialog()
+        {
+            try
+            {
+                if (_currentEditDialog != null && !_currentEditDialog.IsDisposed)
+                {
+                    _currentEditDialog.Close();
+                    _currentEditDialog.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                // 忽略关闭窗口时的异常
+                System.Diagnostics.Debug.WriteLine($"关闭编辑窗口异常: {ex.Message}");
+            }
+            finally
+            {
+                _currentEditDialog = null;
             }
         }
         
@@ -3001,11 +3055,14 @@ namespace WindowInspector
             {
                 Text = "空击步骤设置",
                 Size = new Size(400, 250),
-                StartPosition = FormStartPosition.CenterParent,
+                StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
                 MinimizeBox = false
             };
+            
+            // 设置对话框位置：左边与主窗口右边对齐
+            form.Location = new Point(this.Right, this.Top + (this.Height - form.Height) / 2);
             
             var lblInfo = new Label
             {
@@ -3114,7 +3171,19 @@ namespace WindowInspector
                 }
             };
             
-            form.ShowDialog();
+            // 保存当前编辑窗口引用
+            _currentEditDialog = form;
+            
+            // 窗口关闭时清除引用
+            form.FormClosed += (s, e) =>
+            {
+                if (_currentEditDialog == form)
+                {
+                    _currentEditDialog = null;
+                }
+            };
+            
+            form.Show();
         }
         
         private void ShowJumpStepEditDialog(MoleItem jumpMole, int moleIndex)
@@ -3135,11 +3204,14 @@ namespace WindowInspector
             {
                 Text = "编辑跳转步骤",
                 Size = new Size(500, 380),
-                StartPosition = FormStartPosition.CenterParent,
+                StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
                 MinimizeBox = false
             };
+            
+            // 设置对话框位置：左边与主窗口右边对齐
+            form.Location = new Point(this.Right, this.Top + (this.Height - form.Height) / 2);
 
             var label1 = new Label
             {
@@ -3308,7 +3380,6 @@ namespace WindowInspector
                 Text = "更新",
                 Location = new Point(100, 310),
                 Size = new Size(80, 30),
-                DialogResult = DialogResult.OK,
                 Parent = form
             };
 
@@ -3325,12 +3396,44 @@ namespace WindowInspector
                 Text = "取消",
                 Location = new Point(280, 310),
                 Size = new Size(80, 30),
-                DialogResult = DialogResult.Cancel,
                 Parent = form
             };
-
-            form.AcceptButton = btnUpdate;
-            form.CancelButton = btnCancel;
+            
+            // 更新按钮点击事件
+            btnUpdate.Click += (s, e) =>
+            {
+                if (comboGroup.SelectedIndex >= 0)
+                {
+                    var targetGroupName = comboGroup.SelectedItem.ToString();
+                    var stepIndex = comboStep.SelectedIndex - 1; // -1 表示从头开始
+                    
+                    // 更新跳转步骤
+                    jumpMole.JumpTargetGroup = targetGroupName;
+                    jumpMole.JumpTargetStep = stepIndex;
+                    jumpMole.Name = stepIndex < 0 
+                        ? $"🔗 跳转到 {targetGroupName}" 
+                        : $"🔗 跳转到 {targetGroupName} (步骤 {stepIndex + 1})";
+                    
+                    SaveMoles();
+                    
+                    // 刷新列表显示
+                    var lstMoles = GetCurrentMoleListBox();
+                    if (lstMoles != null)
+                    {
+                        lstMoles.Items[moleIndex] = jumpMole.Name;
+                    }
+                    
+                    var stepInfo = stepIndex < 0 ? "从头开始" : $"从步骤 {stepIndex + 1} 开始";
+                    AppendLog($"✅ 已更新跳转步骤: 跳转到 {targetGroupName} ({stepInfo})", LogType.Success);
+                    form.Close();
+                }
+            };
+            
+            // 取消按钮点击事件
+            btnCancel.Click += (s, e) =>
+            {
+                form.Close();
+            };
 
             // 处理分组选择变化的事件
             void comboGroup_SelectedIndexChanged(object? s, EventArgs e)
@@ -3394,7 +3497,7 @@ namespace WindowInspector
                 }
             };
 
-            // 对话框关闭时释放预览图资源
+            // 对话框关闭时释放预览图资源和清除引用
             form.FormClosed += (s, e) =>
             {
                 if (picPreview.Image != null)
@@ -3403,32 +3506,17 @@ namespace WindowInspector
                     picPreview.Image = null;
                     img.Dispose();
                 }
-            };
-
-            if (form.ShowDialog() == DialogResult.OK && comboGroup.SelectedIndex >= 0)
-            {
-                var targetGroupName = comboGroup.SelectedItem.ToString();
-                var stepIndex = comboStep.SelectedIndex - 1; // -1 表示从头开始
                 
-                // 更新跳转步骤
-                jumpMole.JumpTargetGroup = targetGroupName;
-                jumpMole.JumpTargetStep = stepIndex;
-                jumpMole.Name = stepIndex < 0 
-                    ? $"🔗 跳转到 {targetGroupName}" 
-                    : $"🔗 跳转到 {targetGroupName} (步骤 {stepIndex + 1})";
-                
-                SaveMoles();
-                
-                // 刷新列表显示
-                var lstMoles = GetCurrentMoleListBox();
-                if (lstMoles != null)
+                if (_currentEditDialog == form)
                 {
-                    lstMoles.Items[moleIndex] = jumpMole.Name;
+                    _currentEditDialog = null;
                 }
-                
-                var stepInfo = stepIndex < 0 ? "从头开始" : $"从步骤 {stepIndex + 1} 开始";
-                AppendLog($"✅ 已更新跳转步骤: 跳转到 {targetGroupName} ({stepInfo})", LogType.Success);
-            }
+            };
+            
+            // 保存当前编辑窗口引用
+            _currentEditDialog = form;
+            
+            form.Show();
         }
 
         private void ShowMoleDeleteConfirmDialog(MoleItem mole, int stepIndex)
@@ -3926,14 +4014,14 @@ namespace WindowInspector
                 dialog.Close();
             };
             
-            // 当对话框失去焦点时自动关闭（点击主程序任意位置）
-            dialog.Deactivate += (s, e) =>
-            {
-                if (dialog != null && !dialog.IsDisposed && dialog.Visible)
-                {
-                    dialog.Close();
-                }
-            };
+            // 注释掉自动关闭功能，改为通过右键切换
+            // dialog.Deactivate += (s, e) =>
+            // {
+            //     if (dialog != null && !dialog.IsDisposed && dialog.Visible)
+            //     {
+            //         dialog.Close();
+            //     }
+            // };
             
             // 支持ESC键关闭对话框
             dialog.KeyPreview = true;
@@ -3945,7 +4033,7 @@ namespace WindowInspector
                 }
             };
             
-            // 对话框关闭时释放图像资源
+            // 对话框关闭时释放图像资源和清除引用
             dialog.FormClosed += (s, e) =>
             {
                 if (picPreview?.Image != null)
@@ -3954,7 +4042,15 @@ namespace WindowInspector
                     picPreview.Image = null;
                     img.Dispose();
                 }
+                
+                if (_currentEditDialog == dialog)
+                {
+                    _currentEditDialog = null;
+                }
             };
+            
+            // 保存当前编辑窗口引用
+            _currentEditDialog = dialog;
             
             // 使用非模态对话框
             dialog.Show();
