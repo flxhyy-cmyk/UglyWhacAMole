@@ -1,0 +1,77 @@
+## Visual Studio / .NET
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Publish output
+publish/
+*.zip
+WindowInspector-Release.zip
+
+# Visual Studio cache/options
+.vs/
+.vscode/
+*.code-workspace
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Config files (用户配置，不提交)
+window_config.json
+window_position.json
+last_config.json
+configs/
+last_excel_path.txt
+
+# 打地鼠相关文件（用户数据，不提交）
+moles/
+pending_delete.txt
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+**/packages/*
+
+# Build and test results
+*.dll
+*.exe
+*.pdb
+
+# Temporary files
+*.cache
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin
+$RECYCLE.BIN/
+
+# Mac
+.DS_Store

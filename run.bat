@@ -1,0 +1,3 @@
+@echo off
+echo 正在运行 WindowInspector...
+dotnet run
