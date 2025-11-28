@@ -170,6 +170,7 @@ namespace WindowInspector
             // 设置打地鼠事件
             _moleHunter.LogMessage += (s, msg) => AppendLog(msg);
             _moleHunter.MoleFound += (s, e) => AppendLog($"🎯 击中地鼠: {e.MoleName} at ({e.Location.X}, {e.Location.Y})", LogType.Success);
+            _moleHunter.HuntingStopped += MoleHunter_HuntingStopped;
         }
 
         private void SetupComboBoxDrawing()
@@ -1891,6 +1892,19 @@ namespace WindowInspector
                 AppendLog("⏸️ 打地鼠已停止", LogType.Warning);
             }
         }
+
+        private void MoleHunter_HuntingStopped(object? sender, EventArgs e)
+        {
+            // 在UI线程上更新复选框状态
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => MoleHunter_HuntingStopped(sender, e)));
+                return;
+            }
+            
+            // 取消勾选打地鼠复选框
+            chkMoleEnabled.Checked = false;
+        }
         
 
         
@@ -2731,6 +2745,21 @@ namespace WindowInspector
                     // 选中项使用高亮背景
                     backColor = SystemColors.Highlight;
                 }
+                else if (isHovered)
+                {
+                    // 悬浮项使用浅黄色高亮背景
+                    var effectiveTheme = _themeManager.GetEffectiveTheme();
+                    if (effectiveTheme == ThemeMode.Dark)
+                    {
+                        // 深色主题：使用深橙色
+                        backColor = Color.FromArgb(80, 60, 30);
+                    }
+                    else
+                    {
+                        // 浅色主题：使用浅黄色
+                        backColor = Color.FromArgb(255, 255, 200);
+                    }
+                }
                 else
                 {
                     // 未选中项使用控件的背景色（已被主题管理器设置）
@@ -2825,6 +2854,21 @@ namespace WindowInspector
                     textColor,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter
                 );
+                
+                // 绘制悬浮边框
+                if (isHovered)
+                {
+                    using (var pen = new Pen(Color.OrangeRed, 2))
+                    {
+                        var borderRect = new Rectangle(
+                            e.Bounds.Left + 1,
+                            e.Bounds.Top + 1,
+                            e.Bounds.Width - 2,
+                            e.Bounds.Height - 2
+                        );
+                        e.Graphics.DrawRectangle(pen, borderRect);
+                    }
+                }
                 
                 // 绘制焦点框
                 e.DrawFocusRectangle();

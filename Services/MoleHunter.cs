@@ -30,6 +30,7 @@ namespace WindowInspector.Services
         
         public event EventHandler<string>? LogMessage;
         public event EventHandler<MoleFoundEventArgs>? MoleFound;
+        public event EventHandler? HuntingStopped;
         
         public MoleHunter()
         {
@@ -81,6 +82,7 @@ namespace WindowInspector.Services
             _isRunning = false;
             _cts?.Cancel();
             LogMessage?.Invoke(this, "⏸️ 打地鼠已停止");
+            HuntingStopped?.Invoke(this, EventArgs.Empty);
         }
         
         /// <summary>
@@ -350,6 +352,41 @@ namespace WindowInspector.Services
                             ClickAt(matchResult.Center);
                             MoleFound?.Invoke(this, new MoleFoundEventArgs(mole.Name, matchResult.Center));
                             LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🎯 截图地鼠打击成功 ({matchResult.Center.X}, {matchResult.Center.Y}) | 置信度:{matchResult.Confidence:F2} (阈值:{mole.SimilarityThreshold:F2})");
+                            
+                            // 如果启用了"持续点击直到消失"
+                            if (mole.ClickUntilDisappear)
+                            {
+                                int clickCount = 1;
+                                while (!token.IsCancellationRequested)
+                                {
+                                    // 等待 200ms
+                                    await Task.Delay(200, token);
+                                    
+                                    // 再次检查目标是否还存在
+                                    var recheckResult = FindImageWithEmgu(mole.ImagePath, mole.SimilarityThreshold);
+                                    
+                                    if (recheckResult != null && recheckResult.Found)
+                                    {
+                                        // 目标仍然存在，继续点击
+                                        clickCount++;
+                                        ClickAt(recheckResult.Center);
+                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔄 持续点击第 {clickCount} 次 ({recheckResult.Center.X}, {recheckResult.Center.Y}) | 置信度:{recheckResult.Confidence:F2}");
+                                    }
+                                    else
+                                    {
+                                        // 目标已消失，退出循环
+                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已消失，共点击 {clickCount} 次");
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // 如果启用了"点击后等待"
+                            if (mole.WaitAfterClick && mole.WaitAfterClickMs > 0)
+                            {
+                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 等待 {mole.WaitAfterClickMs} ms...");
+                                await Task.Delay(mole.WaitAfterClickMs, token);
+                            }
                         }
                     }
                     else
