@@ -32,6 +32,7 @@ namespace WindowInspector
         private CheckBox chkMoleEnabled;
         private Button btnCaptureMole;
         private Button btnSetIdleClick;
+        private Button btnAddConfigStep;
         private Button btnBatchSelect;
         private Button btnAddJump;
         private Label lblIdleClickPos;
@@ -326,22 +327,32 @@ namespace WindowInspector
                 Parent = tabPageMole
             };
 
+            // 配置文本定义按钮（放在批量选择按钮前面）
+            btnAddConfigStep = new Button
+            {
+                Text = "配置文本定义",
+                Location = new Point(10, 65),
+                Size = new Size(120, 30),
+                Parent = tabPageMole
+            };
+            btnAddConfigStep.Click += BtnAddConfigStep_Click;
+            
             // 批量选择按钮
             btnBatchSelect = new Button
             {
                 Text = "批量启用/禁用",
-                Location = new Point(170, 65),
-                Size = new Size(140, 30),
+                Location = new Point(140, 65),
+                Size = new Size(120, 30),
                 Parent = tabPageMole
             };
             btnBatchSelect.Click += BtnBatchSelect_Click;
             
-            // 添加跳转按钮
+            // 添加跳转/键鼠按钮
             btnAddJump = new Button
             {
-                Text = "添加跳转",
-                Location = new Point(320, 65),
-                Size = new Size(140, 30),
+                Text = "添加跳转/键鼠",
+                Location = new Point(270, 65),
+                Size = new Size(120, 30),
                 Parent = tabPageMole
             };
             btnAddJump.Click += BtnAddJump_Click;

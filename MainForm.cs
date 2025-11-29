@@ -98,6 +98,7 @@ namespace WindowInspector
                 {
                     try
                     {
+                        AppendLog($"🔄 正在加载上次的配置: {lastConfigName}", LogType.Info);
                         var json = File.ReadAllText(configPath);
                         var config = Newtonsoft.Json.JsonConvert.DeserializeObject<WindowConfig>(json);
                         if (config != null)
@@ -108,21 +109,41 @@ namespace WindowInspector
                             UpdateCellGroupCombo();
                             TryAutoFindWindow();
                             UpdateWindowTitle();
+                            AppendLog($"✅ 已自动加载配置: {lastConfigName}", LogType.Success);
+                        }
+                        else
+                        {
+                            AppendLog($"⚠️ 配置文件解析失败: {lastConfigName}", LogType.Warning);
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"❌ 加载配置失败: {lastConfigName}", LogType.Error);
+                        AppendLog($"错误详情: {ex.Message}", LogType.Error);
+                    }
+                }
+                else
+                {
+                    AppendLog($"⚠️ 上次的配置文件不存在: {lastConfigName}", LogType.Warning);
                 }
             }
             else
             {
+                AppendLog("ℹ️ 没有上次使用的配置记录", LogType.Info);
                 // 加载默认配置
                 var config = _configManager.LoadConfig();
                 if (config != null)
                 {
+                    AppendLog("🔄 正在加载默认配置", LogType.Info);
                     _config = config;
                     UpdateTextCombo();
                     UpdateCellGroupCombo();
                     TryAutoFindWindow();
+                    AppendLog("✅ 已加载默认配置", LogType.Success);
+                }
+                else
+                {
+                    AppendLog("ℹ️ 没有默认配置，使用空配置", LogType.Info);
                 }
             }
 
@@ -172,6 +193,8 @@ namespace WindowInspector
             _moleHunter.LogMessage += (s, msg) => AppendLog(msg);
             _moleHunter.MoleFound += (s, e) => AppendLog($"🎯 击中地鼠: {e.MoleName} at ({e.Location.X}, {e.Location.Y})", LogType.Success);
             _moleHunter.HuntingStopped += MoleHunter_HuntingStopped;
+            _moleHunter.OnConfigSwitchRequested += MoleHunter_OnConfigSwitchRequested;
+            _moleHunter.OnTextContentSwitchRequested += MoleHunter_OnTextContentSwitchRequested;
         }
 
         private void SetupComboBoxDrawing()
@@ -454,30 +477,6 @@ namespace WindowInspector
             var saveAsItem = new ToolStripMenuItem("另存为配置...");
             saveAsItem.Click += (s, e) => SaveConfigAs();
             menu.Items.Add(saveAsItem);
-            
-            menu.Items.Add(new ToolStripSeparator());
-            
-            var resetFillStatusItem = new ToolStripMenuItem("重置所有填充状态");
-            resetFillStatusItem.Click += (s, e) =>
-            {
-                var result = MessageBox.Show(
-                    "确定要重置所有文本项的填充状态吗？",
-                    "确认重置",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
-
-                if (result == DialogResult.Yes)
-                {
-                    foreach (var item in _config.SavedTexts)
-                    {
-                        item.LastFilledTime = null;
-                    }
-                    SaveCurrentConfig();
-                    AppendLog("✅ 已重置所有填充状态", LogType.Success);
-                    ShowAllTextItemsStatus();
-                }
-            };
-            menu.Items.Add(resetFillStatusItem);
             
             menu.Items.Add(new ToolStripSeparator());
             
@@ -811,9 +810,64 @@ namespace WindowInspector
 
         private void TryAutoFindWindow()
         {
-            if (string.IsNullOrEmpty(_config.WindowClass))
-                return;
+            TryAutoFindWindow(true);
+        }
 
+        private void TryAutoFindWindow(bool isStartup)
+        {
+            if (string.IsNullOrEmpty(_config.WindowClass))
+            {
+                if (!isStartup)
+                {
+                    AppendLog("⚠️ 配置中没有窗口类名，无法查找窗口", LogType.Warning);
+                }
+                return;
+            }
+
+            if (!isStartup)
+            {
+                AppendLog($"🔍 正在查找目标窗口...", LogType.Info);
+            }
+
+            IntPtr foundWindow = FindTargetWindow();
+
+            if (foundWindow != IntPtr.Zero)
+            {
+                _targetWindow = foundWindow;
+                WindowHelper.GetWindowRect(_targetWindow, out _windowRect);
+                
+                if (isStartup)
+                {
+                    AppendLog($"✅ 成功找到目标窗口 (句柄: 0x{_targetWindow.ToInt64():X})", LogType.Success);
+                    OnWindowSelected(_config.WindowTitle, true);
+                }
+                else
+                {
+                    AppendLog($"✅ 成功找到目标窗口 (句柄: 0x{_targetWindow.ToInt64():X})", LogType.Success);
+                }
+            }
+            else
+            {
+                if (isStartup)
+                {
+                    // 启动时静默处理，只显示温和提示
+                    AppendLog($"ℹ️ 目标窗口暂未运行，将在填充时自动查找", LogType.Info);
+                    ShowLoadedConfigInfo();
+                }
+                else
+                {
+                    // 填充时未找到才明确提示
+                    AppendLog($"❌ 未找到目标窗口", LogType.Error);
+                    if (!string.IsNullOrEmpty(_config.TargetProgramPath))
+                    {
+                        AppendLog($"   目标程序路径: {_config.TargetProgramPath}", LogType.Info);
+                    }
+                }
+            }
+        }
+
+        private IntPtr FindTargetWindow()
+        {
             IntPtr foundWindow = IntPtr.Zero;
             WindowHelper.EnumWindows((hwnd, lParam) =>
             {
@@ -839,12 +893,98 @@ namespace WindowInspector
                 return true;
             }, IntPtr.Zero);
 
+            return foundWindow;
+        }
+
+        private bool IsWindowValid(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero)
+                return false;
+
+            // 检查窗口是否仍然存在
+            try
+            {
+                var className = WindowHelper.GetWindowClassName(hwnd);
+                return !string.IsNullOrEmpty(className);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool EnsureTargetWindowValid()
+        {
+            // 如果窗口句柄有效，直接返回
+            if (IsWindowValid(_targetWindow))
+                return true;
+
+            // 窗口句柄无效，尝试重新查找
+            AppendLog($"🔍 正在查找目标窗口...", LogType.Info);
+            
+            IntPtr foundWindow = FindTargetWindow();
+            
             if (foundWindow != IntPtr.Zero)
             {
                 _targetWindow = foundWindow;
                 WindowHelper.GetWindowRect(_targetWindow, out _windowRect);
-                OnWindowSelected(_config.WindowTitle, true);
+                AppendLog($"✅ 成功找到目标窗口 (句柄: 0x{_targetWindow.ToInt64():X})", LogType.Success);
+                return true;
             }
+            
+            // 仍然找不到，给出明确提示
+            AppendLog($"❌ 未找到目标窗口", LogType.Error);
+            AppendLog($"   窗口类名: {_config.WindowClass}", LogType.Info);
+            if (!_config.IsExcelMode)
+            {
+                AppendLog($"   窗口标题: {_config.WindowTitle}", LogType.Info);
+            }
+            
+            if (!string.IsNullOrEmpty(_config.TargetProgramPath))
+            {
+                AppendLog($"   请先启动: {Path.GetFileName(_config.TargetProgramPath)}", LogType.Warning);
+            }
+            else
+            {
+                AppendLog($"   请先启动目标程序", LogType.Warning);
+            }
+            
+            return false;
+        }
+
+        private void ShowLoadedConfigInfo()
+        {
+            AppendLog($"\n📋 已加载配置信息:", LogType.Info);
+            
+            if (_config.IsExcelMode)
+            {
+                AppendLog("📊 模式: Excel专用模式", LogType.Info);
+                if (_config.ExcelCells.Count > 0)
+                {
+                    AppendLog($"   Excel单元格数量: {_config.ExcelCells.Count}", LogType.Info);
+                    AppendLog($"   单元格地址: {string.Join(", ", _config.ExcelCells)}", LogType.Info);
+                }
+            }
+            else
+            {
+                AppendLog("📝 模式: 普通窗口模式", LogType.Info);
+                if (_config.InputPositions.Count > 0)
+                {
+                    AppendLog($"   输入框位置数量: {_config.InputPositions.Count}", LogType.Info);
+                    for (int i = 0; i < _config.InputPositions.Count; i++)
+                    {
+                        var pos = _config.InputPositions[i];
+                        AppendLog($"   输入框 {i + 1}: 相对位置 ({pos.X}, {pos.Y})", LogType.Info);
+                    }
+                }
+            }
+            
+            if (_config.SavedTexts.Count > 0)
+            {
+                AppendLog($"   已保存文本数量: {_config.SavedTexts.Count}", LogType.Info);
+            }
+            
+            AppendLog($"\n💡 提示: 启动目标程序后，直接按 F2 即可自动填充", LogType.Info);
         }
 
         private void OnWindowSelected(string windowTitle, bool auto)
@@ -1022,17 +1162,6 @@ namespace WindowInspector
                     {
                         AppendLog($"文本{i + 1}: {item.Texts[i]}");
                     }
-                }
-                
-                // 显示填充状态
-                if (item.LastFilledTime.HasValue)
-                {
-                    var timeDiff = CalculateTimeDifference(item.LastFilledTime.Value);
-                    AppendLog($"状态: ✅ 已填充 ({timeDiff})", LogType.Success);
-                }
-                else
-                {
-                    AppendLog("状态: ⏸️ 待填充", LogType.Warning);
                 }
                 
                 AppendLog("");
@@ -1481,33 +1610,22 @@ namespace WindowInspector
                 }
                 else
                 {
+                    // 填充前确保窗口句柄有效
+                    if (!EnsureTargetWindowValid())
+                    {
+                        return; // 窗口未找到，已在方法内提示用户
+                    }
+                    
                     await _textFiller.FillTextAsync(_targetWindow, _windowRect, _config.InputPositions, item.Texts);
                 }
                 
-                item.LastFilledTime = DateTime.Now;
-                SaveCurrentConfig();
-                
-                // 标记当前项为已填充
                 AppendLog($"✅ 已填充: {item.Name}", LogType.Success);
                 
-                // 自动切换到下一个未填充的项（从当前位置往下找）
-                int nextIndex = FindNextUnfilledIndex(currentIndex + 1);
-                
-                if (nextIndex >= 0)
-                {
-                    cmbSavedTexts.SelectedIndex = nextIndex;
-                    var nextItem = _config.SavedTexts[nextIndex];
-                    AppendLog($"⏭️ 已切换到: {nextItem.Name}", LogType.Info);
-                    
-                    // 显示状态
-                    ShowAllTextItemsStatus();
-                }
-                else
-                {
-                    AppendLog("🎉 所有文本已填充完成！", LogType.Success);
-                    // 显示状态
-                    ShowAllTextItemsStatus();
-                }
+                // 纯粹的顺序跳转：填充完当前项后，跳转到下一个项（循环）
+                // 不记录、不判断、只服从用户当前选择
+                int nextIndex = (currentIndex + 1) % _config.SavedTexts.Count;
+                cmbSavedTexts.SelectedIndex = nextIndex;
+                AppendLog($"⏭️ 跳转到: {_config.SavedTexts[nextIndex].Name}", LogType.Info);
             }
             catch (Exception ex)
             {
@@ -1515,76 +1633,11 @@ namespace WindowInspector
             }
         }
 
-        /// <summary>
-        /// 从指定位置开始查找下一个未填充的项
-        /// </summary>
-        private int FindNextUnfilledIndex(int startIndex)
-        {
-            // 从startIndex开始往后找
-            for (int i = startIndex; i < _config.SavedTexts.Count; i++)
-            {
-                if (!_config.SavedTexts[i].LastFilledTime.HasValue)
-                {
-                    return i;
-                }
-            }
-            
-            // 如果后面没有未填充的，返回-1
-            return -1;
-        }
 
-        private void ShowAllTextItemsStatus()
-        {
-            // 统计已填充数量
-            int filledCount = _config.SavedTexts.Count(item => item.LastFilledTime.HasValue);
-            int totalCount = _config.SavedTexts.Count;
-            
-            AppendLog($"\n📊 进度: {filledCount}/{totalCount} 已完成", LogType.Info);
-            
-            // 显示最近填充的3条
-            var recentFilled = _config.SavedTexts
-                .Where(item => item.LastFilledTime.HasValue)
-                .OrderByDescending(item => item.LastFilledTime)
-                .Take(3)
-                .ToList();
-            
-            if (recentFilled.Count > 0)
-            {
-                AppendLog("最近已填充:", LogType.Success);
-                foreach (var item in recentFilled)
-                {
-                    var timeDiff = CalculateTimeDifference(item.LastFilledTime!.Value);
-                    AppendLog($"  ✅ {item.Name} ({timeDiff})", LogType.Normal);
-                }
-            }
-            
-            // 显示下一个待填充的
-            var currentIndex = cmbSavedTexts.SelectedIndex;
-            if (currentIndex >= 0 && currentIndex < _config.SavedTexts.Count)
-            {
-                var currentItem = _config.SavedTexts[currentIndex];
-                if (!currentItem.LastFilledTime.HasValue)
-                {
-                    AppendLog($"\n▶️ 下一个待填充: {currentItem.Name}", LogType.Warning);
-                }
-            }
-            
-            AppendLog("");
-        }
 
-        private string CalculateTimeDifference(DateTime lastTime)
-        {
-            var diff = DateTime.Now - lastTime;
-            
-            if (diff.TotalMinutes < 1)
-                return "刚刚";
-            else if (diff.TotalMinutes < 60)
-                return $"{(int)diff.TotalMinutes}分钟前";
-            else if (diff.TotalHours < 24)
-                return $"{(int)diff.TotalHours}小时前";
-            else
-                return $"{(int)diff.TotalDays}天前";
-        }
+
+
+
 
         internal void BtnExportExcel_Click(object? sender, EventArgs e)
         {
@@ -1666,6 +1719,71 @@ namespace WindowInspector
                     if (loadedGroups != null && loadedGroups.Count > 0)
                     {
                         _moleGroups = loadedGroups;
+                        
+                        // 数据迁移：将旧的IdleClickPositions转换为Moles中的空击步骤
+                        bool needsMigration = false;
+                        foreach (var group in _moleGroups)
+                        {
+                            // 检查是否有旧的IdleClickPositions数据（通过反射或尝试反序列化）
+                            // 由于我们已经移除了IdleClickPositions字段，这里需要特殊处理
+                            // 我们可以尝试从JSON中读取IdleClickPositions
+                            try
+                            {
+                                var jsonToken = Newtonsoft.Json.Linq.JToken.Parse(json);
+                                var groupsArray = jsonToken as Newtonsoft.Json.Linq.JArray ?? (jsonToken as Newtonsoft.Json.Linq.JObject)?["$values"] as Newtonsoft.Json.Linq.JArray;
+                                
+                                if (groupsArray != null)
+                                {
+                                    for (int i = 0; i < groupsArray.Count && i < _moleGroups.Count; i++)
+                                    {
+                                        var groupObj = groupsArray[i] as Newtonsoft.Json.Linq.JObject;
+                                        if (groupObj != null && groupObj["IdleClickPositions"] != null)
+                                        {
+                                            var idleClickPositions = groupObj["IdleClickPositions"].ToObject<List<Point>>();
+                                            if (idleClickPositions != null && idleClickPositions.Count > 0)
+                                            {
+                                                // 检查是否已经有对应的空击步骤
+                                                var existingIdleClicks = _moleGroups[i].Moles.Where(m => m.IsIdleClick).ToList();
+                                                
+                                                // 只迁移那些不在Moles列表中的空击位置
+                                                foreach (var pos in idleClickPositions)
+                                                {
+                                                    bool exists = existingIdleClicks.Any(m => 
+                                                        m.IdleClickPosition.HasValue && 
+                                                        m.IdleClickPosition.Value.X == pos.X && 
+                                                        m.IdleClickPosition.Value.Y == pos.Y);
+                                                    
+                                                    if (!exists)
+                                                    {
+                                                        int idleClickCount = _moleGroups[i].Moles.Count(m => m.IsIdleClick) + 1;
+                                                        var idleMole = new MoleItem
+                                                        {
+                                                            Name = $"空击 {idleClickCount}",
+                                                            ImagePath = "",
+                                                            IsEnabled = true,
+                                                            IsIdleClick = true,
+                                                            IdleClickPosition = pos
+                                                        };
+                                                        _moleGroups[i].Moles.Add(idleMole);
+                                                        needsMigration = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // 忽略迁移错误
+                            }
+                        }
+                        
+                        if (needsMigration)
+                        {
+                            AppendLog("🔄 检测到旧版本数据，已自动迁移空击位置", LogType.Info);
+                            SaveMoles(); // 保存迁移后的数据
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -1754,7 +1872,11 @@ namespace WindowInspector
                 var mole = group.Moles[i];
                 string displayText;
                 
-                if (mole.IsIdleClick && mole.IdleClickPosition.HasValue)
+                if (mole.IsConfigStep)
+                {
+                    displayText = $"{i + 1}. {mole.Name}";
+                }
+                else if (mole.IsIdleClick && mole.IdleClickPosition.HasValue)
                 {
                     displayText = $"{i + 1}. 💤 {mole.Name}: ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})";
                 }
@@ -1775,6 +1897,7 @@ namespace WindowInspector
             lstMoles.MouseLeave += LstMoles_MouseLeave;
             lstMoles.KeyDown += LstMoles_KeyDown;
             lstMoles.DrawItem += LstMoles_DrawItem;
+            lstMoles.ItemCheck += LstMoles_ItemCheck;
             
             // 手动应用主题颜色
             var effectiveTheme = _themeManager.GetEffectiveTheme();
@@ -1829,44 +1952,14 @@ namespace WindowInspector
             }
         }
         
-        private void UpdateIdleClicksInList()
-        {
-            var group = GetCurrentMoleGroup();
-            
-            // 移除旧的空击项
-            for (int i = group.Moles.Count - 1; i >= 0; i--)
-            {
-                if (group.Moles[i].IsIdleClick)
-                {
-                    group.Moles.RemoveAt(i);
-                }
-            }
-            
-            // 添加新的空击项
-            for (int i = 0; i < group.IdleClickPositions.Count; i++)
-            {
-                var pos = group.IdleClickPositions[i];
-                var idleMole = new MoleItem
-                {
-                    Name = $"空击 {i + 1}",
-                    ImagePath = "",
-                    IsEnabled = true,
-                    IsIdleClick = true,
-                    IdleClickPosition = pos
-                };
-                group.Moles.Add(idleMole);
-            }
-            
-            // 刷新列表显示（包含序号）
-            RefreshCurrentMoleList();
-        }
-        
         private void UpdateIdleClickLabel()
         {
             var group = GetCurrentMoleGroup();
-            if (group.IdleClickPositions.Count > 0)
+            int idleClickCount = group.Moles.Count(m => m.IsIdleClick);
+            
+            if (idleClickCount > 0)
             {
-                lblIdleClickPos.Text = $"空击: {group.IdleClickPositions.Count} 个位置";
+                lblIdleClickPos.Text = $"空击: {idleClickCount} 个位置";
                 lblIdleClickPos.ForeColor = Color.Green;
             }
             else
@@ -1899,11 +1992,13 @@ namespace WindowInspector
                     }
                 }
                 
-                _moleHunter.Start(group.Moles, group.IdleClickPositions, _moleGroups);
+                _moleHunter.Start(group.Moles, _moleGroups);
                 AppendLog($"🎯 打地鼠已启动 - 分组: {group.Name}", LogType.Success);
-                if (group.IdleClickPositions.Count > 0)
+                
+                int idleClickCount = group.Moles.Count(m => m.IsIdleClick);
+                if (idleClickCount > 0)
                 {
-                    AppendLog($"💤 空击位置数量: {group.IdleClickPositions.Count}", LogType.Info);
+                    AppendLog($"💤 空击位置数量: {idleClickCount}", LogType.Info);
                 }
             }
             else
@@ -1926,6 +2021,52 @@ namespace WindowInspector
             chkMoleEnabled.Checked = false;
         }
         
+        private void MoleHunter_OnConfigSwitchRequested(object? sender, string configName)
+        {
+            // 在UI线程上执行配置切换
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => MoleHunter_OnConfigSwitchRequested(sender, configName)));
+                return;
+            }
+            
+            try
+            {
+                LoadNamedConfig(configName);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"❌ 配置切换失败: {ex.Message}", LogType.Error);
+            }
+        }
+        
+        private void MoleHunter_OnTextContentSwitchRequested(object? sender, string textName)
+        {
+            // 在UI线程上执行填充内容切换
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => MoleHunter_OnTextContentSwitchRequested(sender, textName)));
+                return;
+            }
+            
+            try
+            {
+                // 查找目标文本项
+                var targetIndex = _config.SavedTexts.FindIndex(t => t.Name == textName);
+                if (targetIndex >= 0)
+                {
+                    cmbSavedTexts.SelectedIndex = targetIndex;
+                }
+                else
+                {
+                    AppendLog($"⚠️ 未找到填充内容: {textName}", LogType.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"❌ 填充内容切换失败: {ex.Message}", LogType.Error);
+            }
+        }
 
         
         private void BtnSetIdleClick_Click(object? sender, EventArgs e)
@@ -1946,13 +2087,27 @@ namespace WindowInspector
                         WindowHelper.GetCursorPos(out var pos);
                         var newPoint = new Point(pos.X, pos.Y);
                         var group = GetCurrentMoleGroup();
-                        group.IdleClickPositions.Add(newPoint);
+                        
+                        // 计算空击步骤的编号
+                        int idleClickCount = group.Moles.Count(m => m.IsIdleClick) + 1;
+                        
+                        // 直接创建空击步骤并添加到列表末尾
+                        var idleMole = new MoleItem
+                        {
+                            Name = $"空击 {idleClickCount}",
+                            ImagePath = "",
+                            IsEnabled = true,
+                            IsIdleClick = true,
+                            IdleClickPosition = newPoint
+                        };
+                        
+                        group.Moles.Add(idleMole);
                         
                         Invoke(new Action(() =>
                         {
                             UpdateIdleClickLabel();
-                            AppendLog($"✅ 空击位置 {group.IdleClickPositions.Count}: ({pos.X}, {pos.Y})", LogType.Success);
-                            UpdateIdleClicksInList();
+                            AppendLog($"✅ 空击位置 {idleClickCount}: ({pos.X}, {pos.Y})", LogType.Success);
+                            RefreshCurrentMoleList();
                             SaveMoles(); // 保存配置
                         }));
                         
@@ -2222,6 +2377,15 @@ namespace WindowInspector
             // 对话框关闭后，位置已经保存在 _batchSelectSliderA 和 _batchSelectSliderB 中
         }
         
+        private void BtnAddConfigStep_Click(object? sender, EventArgs e)
+        {
+            var currentGroup = GetCurrentMoleGroup();
+            if (currentGroup == null)
+                return;
+            
+            ShowConfigStepDialog(null, -1);
+        }
+        
         private void BtnAddJump_Click(object? sender, EventArgs e)
         {
             // 获取所有分组名称，除了当前分组
@@ -2236,11 +2400,11 @@ namespace WindowInspector
                 return;
             }
 
-            // 创建选择框
+            // 创建选择框（加高窗口以容纳新功能）
             var form = new Form
             {
                 Text = "选择跳转目标",
-                Size = new Size(350, 280),
+                Size = new Size(350, 620),
                 StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -2330,10 +2494,229 @@ namespace WindowInspector
                 Parent = form
             };
 
+            // 分隔线
+            var separator = new Label
+            {
+                Text = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                Location = new Point(20, 190),
+                Size = new Size(310, 20),
+                ForeColor = Color.Gray,
+                Parent = form
+            };
+
+            // 键盘按键输入复选框
+            var chkSendKeyPress = new CheckBox
+            {
+                Text = "发送键盘按键输入（忽略跳转逻辑）",
+                Location = new Point(20, 215),
+                Size = new Size(310, 25),
+                Parent = form
+            };
+
+            var labelKeyPress = new Label
+            {
+                Text = "按键定义（点击文本框后按下按键）:",
+                Location = new Point(20, 245),
+                Size = new Size(310, 20),
+                Enabled = false,
+                Parent = form
+            };
+
+            var txtKeyPress = new TextBox
+            {
+                Location = new Point(20, 270),
+                Size = new Size(310, 25),
+                ReadOnly = true,
+                Enabled = false,
+                PlaceholderText = "点击后按下按键...",
+                Parent = form
+            };
+
+            var labelWaitTime = new Label
+            {
+                Text = "按键输入后等待时间（毫秒）:",
+                Location = new Point(20, 305),
+                Size = new Size(310, 20),
+                Enabled = false,
+                Parent = form
+            };
+
+            var txtWaitTime = new TextBox
+            {
+                Text = "100",
+                Location = new Point(20, 330),
+                Size = new Size(310, 25),
+                Enabled = false,
+                Parent = form
+            };
+
+            // 鼠标滚动复选框
+            var chkMouseScroll = new CheckBox
+            {
+                Text = "鼠标滚动操作",
+                Location = new Point(20, 365),
+                Size = new Size(310, 25),
+                Enabled = false,
+                Parent = form
+            };
+
+            var labelScrollDirection = new Label
+            {
+                Text = "滚动方向:",
+                Location = new Point(40, 395),
+                Size = new Size(70, 20),
+                Enabled = false,
+                Parent = form
+            };
+
+            var comboScrollDirection = new ComboBox
+            {
+                Location = new Point(110, 392),
+                Size = new Size(90, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Enabled = false,
+                Parent = form
+            };
+            comboScrollDirection.Items.Add("向上滚动");
+            comboScrollDirection.Items.Add("向下滚动");
+            comboScrollDirection.SelectedIndex = 0;
+
+            var labelScrollCount = new Label
+            {
+                Text = "滚动次数:",
+                Location = new Point(40, 425),
+                Size = new Size(70, 20),
+                Enabled = false,
+                Parent = form
+            };
+
+            var txtScrollCount = new TextBox
+            {
+                Text = "1",
+                Location = new Point(40, 450),
+                Size = new Size(260, 25),
+                Enabled = false,
+                Parent = form
+            };
+
+            var labelScrollWait = new Label
+            {
+                Text = "滚动后延时(ms):",
+                Location = new Point(40, 480),
+                Size = new Size(110, 20),
+                Enabled = false,
+                Parent = form
+            };
+
+            var txtScrollWait = new TextBox
+            {
+                Text = "100",
+                Location = new Point(40, 505),
+                Size = new Size(260, 25),
+                Enabled = false,
+                Parent = form
+            };
+
+            // 复选框状态改变事件
+            chkSendKeyPress.CheckedChanged += (s, e) =>
+            {
+                bool enabled = chkSendKeyPress.Checked;
+                labelKeyPress.Enabled = enabled;
+                txtKeyPress.Enabled = enabled;
+                labelWaitTime.Enabled = enabled;
+                txtWaitTime.Enabled = enabled;
+                chkMouseScroll.Enabled = enabled;
+                
+                // 如果禁用按键输入，同时禁用鼠标滚动
+                if (!enabled)
+                {
+                    chkMouseScroll.Checked = false;
+                }
+                
+                // 禁用/启用跳转相关控件
+                label1.Enabled = !enabled;
+                comboGroup.Enabled = !enabled;
+                label2.Enabled = !enabled;
+                comboStep.Enabled = !enabled;
+            };
+
+            // 鼠标滚动复选框状态改变事件
+            chkMouseScroll.CheckedChanged += (s, e) =>
+            {
+                bool enabled = chkMouseScroll.Checked;
+                labelScrollDirection.Enabled = enabled;
+                comboScrollDirection.Enabled = enabled;
+                labelScrollCount.Enabled = enabled;
+                txtScrollCount.Enabled = enabled;
+                labelScrollWait.Enabled = enabled;
+                txtScrollWait.Enabled = enabled;
+            };
+
+            // 按键录制逻辑
+            string recordedKey = "";
+            bool hotkeysUnregistered = false;
+            
+            txtKeyPress.Enter += (s, e) =>
+            {
+                txtKeyPress.Text = "按下按键...";
+                recordedKey = "";
+                
+                // 暂时注销全局热键，允许用户录制 F2、F3、F4、F6
+                UnregisterGlobalHotKeys();
+                hotkeysUnregistered = true;
+            };
+
+            txtKeyPress.Leave += (s, e) =>
+            {
+                // 恢复全局热键
+                if (hotkeysUnregistered)
+                {
+                    RegisterGlobalHotKeys();
+                    hotkeysUnregistered = false;
+                }
+            };
+
+            txtKeyPress.KeyDown += (s, e) =>
+            {
+                e.SuppressKeyPress = true; // 阻止默认行为
+                
+                // 构建按键字符串
+                var keyParts = new List<string>();
+                
+                if (e.Control) keyParts.Add("Ctrl");
+                if (e.Shift) keyParts.Add("Shift");
+                if (e.Alt) keyParts.Add("Alt");
+                
+                // 获取主键
+                var mainKey = e.KeyCode.ToString();
+                
+                // 排除修饰键本身
+                if (mainKey != "ControlKey" && mainKey != "ShiftKey" && mainKey != "Menu")
+                {
+                    keyParts.Add(mainKey);
+                }
+                
+                if (keyParts.Count > 0)
+                {
+                    recordedKey = string.Join("+", keyParts);
+                    txtKeyPress.Text = recordedKey;
+                }
+            };
+            
+            // 对话框关闭时确保恢复热键
+            form.FormClosing += (s, e) =>
+            {
+                if (hotkeysUnregistered)
+                {
+                    RegisterGlobalHotKeys();
+                    hotkeysUnregistered = false;
+                }
+            };
+
             var btnOk = new Button
             {
                 Text = "确定",
-                Location = new Point(150, 200),
+                Location = new Point(150, 545),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.OK,
                 Parent = form
@@ -2342,7 +2725,7 @@ namespace WindowInspector
             var btnCancel = new Button
             {
                 Text = "取消",
-                Location = new Point(240, 200),
+                Location = new Point(240, 545),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.Cancel,
                 Parent = form
@@ -2375,35 +2758,113 @@ namespace WindowInspector
                 comboStep.SelectedIndex = 0;
             }
 
-            if (form.ShowDialog() == DialogResult.OK && comboGroup.SelectedIndex >= 0)
+            if (form.ShowDialog() == DialogResult.OK)
             {
-                var targetGroupName = comboGroup.SelectedItem.ToString();
-                var stepIndex = comboStep.SelectedIndex - 1; // -1 表示从头开始
+                MoleItem jumpMole;
                 
-                // 创建跳转步骤
-                var jumpMole = new MoleItem
+                if (chkSendKeyPress.Checked)
                 {
-                    Name = stepIndex < 0 
-                        ? $"🔗 跳转到 {targetGroupName}" 
-                        : $"🔗 跳转到 {targetGroupName} (步骤 {stepIndex + 1})",
-                    IsJump = true,
-                    JumpTargetGroup = targetGroupName,
-                    JumpTargetStep = stepIndex,
-                    IsEnabled = true
-                };
-
-                currentGroup.Moles.Add(jumpMole);
-                SaveMoles();
-                
-                // 更新列表显示
-                var lstMoles = GetCurrentMoleListBox();
-                if (lstMoles != null)
-                {
-                    lstMoles.Items.Add(jumpMole.Name, true);
+                    // 键盘按键输入模式
+                    if (string.IsNullOrEmpty(recordedKey))
+                    {
+                        MessageBox.Show("请先录制按键", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
+                    if (!int.TryParse(txtWaitTime.Text, out int waitMs) || waitMs < 0)
+                    {
+                        MessageBox.Show("等待时间必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
+                    // 验证鼠标滚动参数
+                    int scrollCount = 1;
+                    int scrollWaitMs = 100;
+                    if (chkMouseScroll.Checked)
+                    {
+                        if (!int.TryParse(txtScrollCount.Text, out scrollCount) || scrollCount < 1)
+                        {
+                            MessageBox.Show("滚动次数必须是正整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        
+                        if (!int.TryParse(txtScrollWait.Text, out scrollWaitMs) || scrollWaitMs < 0)
+                        {
+                            MessageBox.Show("滚动后延时必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                    }
+                    
+                    jumpMole = new MoleItem
+                    {
+                        Name = $"⌨️ 按键: {recordedKey}",
+                        IsJump = true,
+                        SendKeyPress = true,
+                        KeyPressDefinition = recordedKey,
+                        KeyPressWaitMs = waitMs,
+                        EnableMouseScroll = chkMouseScroll.Checked,
+                        ScrollUp = comboScrollDirection.SelectedIndex == 0,
+                        ScrollCount = scrollCount,
+                        ScrollWaitMs = scrollWaitMs,
+                        IsEnabled = true
+                    };
+                    
+                    currentGroup.Moles.Add(jumpMole);
+                    SaveMoles();
+                    
+                    var lstMoles = GetCurrentMoleListBox();
+                    if (lstMoles != null)
+                    {
+                        int index = currentGroup.Moles.Count - 1;
+                        string displayText = $"{index + 1}. 🔗 {jumpMole.Name}";
+                        lstMoles.Items.Add(displayText, true);
+                    }
+                    
+                    var logMsg = $"✅ 已添加按键步骤: {recordedKey} (等待 {waitMs}ms)";
+                    if (chkMouseScroll.Checked)
+                    {
+                        var direction = comboScrollDirection.SelectedIndex == 0 ? "向上" : "向下";
+                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms)";
+                    }
+                    AppendLog(logMsg, LogType.Success);
                 }
+                else
+                {
+                    // 跳转模式
+                    if (comboGroup.SelectedIndex < 0)
+                    {
+                        MessageBox.Show("请选择跳转目标分组", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
+                    var targetGroupName = comboGroup.SelectedItem.ToString();
+                    var stepIndex = comboStep.SelectedIndex - 1; // -1 表示从头开始
+                    
+                    jumpMole = new MoleItem
+                    {
+                        Name = stepIndex < 0 
+                            ? $"🔗 跳转到 {targetGroupName}" 
+                            : $"🔗 跳转到 {targetGroupName} (步骤 {stepIndex + 1})",
+                        IsJump = true,
+                        JumpTargetGroup = targetGroupName,
+                        JumpTargetStep = stepIndex,
+                        IsEnabled = true
+                    };
 
-                var stepInfo = stepIndex < 0 ? "从头开始" : $"从步骤 {stepIndex + 1} 开始";
-                AppendLog($"✅ 已添加跳转步骤: 跳转到 {targetGroupName} ({stepInfo})", LogType.Success);
+                    currentGroup.Moles.Add(jumpMole);
+                    SaveMoles();
+                    
+                    var lstMoles = GetCurrentMoleListBox();
+                    if (lstMoles != null)
+                    {
+                        int index = currentGroup.Moles.Count - 1;
+                        string displayText = $"{index + 1}. 🔗 {jumpMole.Name}";
+                        lstMoles.Items.Add(displayText, true);
+                    }
+
+                    var stepInfo = stepIndex < 0 ? "从头开始" : $"从步骤 {stepIndex + 1} 开始";
+                    AppendLog($"✅ 已添加跳转步骤: 跳转到 {targetGroupName} ({stepInfo})", LogType.Success);
+                }
             }
         }
 
@@ -2563,6 +3024,29 @@ namespace WindowInspector
         private int _lastPreviewIndex = -1;
         private int _hoveredMoleIndex = -1;
         private CheckedListBox? _lastHoveredListBox = null;
+        
+        private void LstMoles_ItemCheck(object? sender, ItemCheckEventArgs e)
+        {
+            if (sender is CheckedListBox lstMoles)
+            {
+                var group = GetCurrentMoleGroup();
+                if (group == null || e.Index < 0 || e.Index >= group.Moles.Count)
+                    return;
+                
+                // 使用 BeginInvoke 延迟执行，因为 ItemCheck 事件在状态实际改变之前触发
+                this.BeginInvoke(new Action(() =>
+                {
+                    // 同步复选框状态到配置
+                    group.Moles[e.Index].IsEnabled = lstMoles.GetItemChecked(e.Index);
+                    
+                    // 实时保存配置
+                    SaveMoles();
+                    
+                    var statusText = group.Moles[e.Index].IsEnabled ? "已启用" : "已禁用";
+                    AppendLog($"✅ 步骤 {e.Index + 1} {statusText}: {group.Moles[e.Index].Name}", LogType.Info);
+                }));
+            }
+        }
         
         private void LstMoles_MouseLeave(object? sender, EventArgs e)
         {
@@ -2971,6 +3455,10 @@ namespace WindowInspector
                 {
                     displayText = $"{i + 1}. 💤 {mole.Name}: ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})";
                 }
+                else if (mole.IsConfigStep)
+                {
+                    displayText = $"{i + 1}. {mole.Name}";
+                }
                 else if (mole.IsJump)
                 {
                     displayText = $"{i + 1}. 🔗 {mole.Name}";
@@ -2999,6 +3487,13 @@ namespace WindowInspector
                     CloseCurrentEditDialog();
                     
                     var mole = group.Moles[index];
+                    
+                    // 如果是配置步骤，显示编辑对话框
+                    if (mole.IsConfigStep)
+                    {
+                        ShowConfigStepDialog(mole, index);
+                        return;
+                    }
                     
                     // 如果是跳转步骤，显示编辑对话框
                     if (mole.IsJump)
@@ -3105,7 +3600,7 @@ namespace WindowInspector
             var btnSave = new Button
             {
                 Text = "保存",
-                Location = new Point(100, 170),
+                Location = new Point(190, 170),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -3113,17 +3608,8 @@ namespace WindowInspector
             var btnDelete = new Button
             {
                 Text = "删除",
-                Location = new Point(190, 170),
+                Location = new Point(100, 170),
                 Size = new Size(80, 30),
-                Parent = form
-            };
-            
-            var btnCancel = new Button
-            {
-                Text = "取消",
-                Location = new Point(280, 170),
-                Size = new Size(80, 30),
-                DialogResult = DialogResult.Cancel,
                 Parent = form
             };
             
@@ -3147,24 +3633,11 @@ namespace WindowInspector
                 
                 if (result == DialogResult.Yes)
                 {
-                    // 从空击位置列表中移除
-                    if (idleMole.IdleClickPosition.HasValue)
-                    {
-                        var posToRemove = idleMole.IdleClickPosition.Value;
-                        // 查找并删除匹配的位置
-                        for (int i = currentGroup.IdleClickPositions.Count - 1; i >= 0; i--)
-                        {
-                            if (currentGroup.IdleClickPositions[i].X == posToRemove.X && 
-                                currentGroup.IdleClickPositions[i].Y == posToRemove.Y)
-                            {
-                                currentGroup.IdleClickPositions.RemoveAt(i);
-                                break;
-                            }
-                        }
-                    }
+                    // 直接从Moles列表中移除
+                    currentGroup.Moles.Remove(idleMole);
                     
                     AppendLog($"✅ 已删除空击位置: {idleMole.Name}", LogType.Success);
-                    UpdateIdleClicksInList();
+                    RefreshCurrentMoleList();
                     UpdateIdleClickLabel();
                     SaveMoles();
                     form.Close();
@@ -3184,6 +3657,9 @@ namespace WindowInspector
             };
             
             form.Show();
+            
+            // 自动聚焦删除按钮
+            btnDelete.Focus();
         }
         
         private void ShowJumpStepEditDialog(MoleItem jumpMole, int moleIndex)
@@ -3193,17 +3669,17 @@ namespace WindowInspector
                 .Where(g => g.Name != currentGroup.Name)
                 .ToList();
 
-            if (otherGroups.Count == 0)
+            if (otherGroups.Count == 0 && !jumpMole.SendKeyPress)
             {
                 MessageBox.Show("没有其他分组可以跳转到", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // 创建编辑对话框（加宽150用于预览）
+            // 创建编辑对话框（加高以容纳按键输入和鼠标滚动UI）
             var form = new Form
             {
                 Text = "编辑跳转步骤",
-                Size = new Size(500, 380),
+                Size = new Size(500, 680),
                 StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -3375,10 +3851,236 @@ namespace WindowInspector
                 Parent = form
             };
 
+            // 分隔线
+            var separator = new Label
+            {
+                Text = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                Location = new Point(20, 190),
+                Size = new Size(310, 20),
+                ForeColor = Color.Gray,
+                Parent = form
+            };
+
+            // 键盘按键输入复选框
+            var chkSendKeyPress = new CheckBox
+            {
+                Text = "发送键盘按键输入（忽略跳转逻辑）",
+                Location = new Point(20, 215),
+                Size = new Size(310, 25),
+                Checked = jumpMole.SendKeyPress,
+                Parent = form
+            };
+
+            var labelKeyPress = new Label
+            {
+                Text = "按键定义（点击文本框后按下按键）:",
+                Location = new Point(20, 245),
+                Size = new Size(310, 20),
+                Enabled = jumpMole.SendKeyPress,
+                Parent = form
+            };
+
+            var txtKeyPress = new TextBox
+            {
+                Location = new Point(20, 270),
+                Size = new Size(310, 25),
+                ReadOnly = true,
+                Enabled = jumpMole.SendKeyPress,
+                Text = jumpMole.KeyPressDefinition,
+                PlaceholderText = "点击后按下按键...",
+                Parent = form
+            };
+
+            var labelWaitTime = new Label
+            {
+                Text = "按键输入后等待时间（毫秒）:",
+                Location = new Point(20, 305),
+                Size = new Size(310, 20),
+                Enabled = jumpMole.SendKeyPress,
+                Parent = form
+            };
+
+            var txtWaitTime = new TextBox
+            {
+                Text = jumpMole.KeyPressWaitMs.ToString(),
+                Location = new Point(20, 330),
+                Size = new Size(310, 25),
+                Enabled = jumpMole.SendKeyPress,
+                Parent = form
+            };
+
+            // 鼠标滚动复选框
+            var chkMouseScroll = new CheckBox
+            {
+                Text = "鼠标滚动操作",
+                Location = new Point(20, 365),
+                Size = new Size(310, 25),
+                Checked = jumpMole.EnableMouseScroll,
+                Enabled = jumpMole.SendKeyPress,
+                Parent = form
+            };
+
+            var labelScrollDirection = new Label
+            {
+                Text = "滚动方向:",
+                Location = new Point(40, 395),
+                Size = new Size(70, 20),
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+
+            var comboScrollDirection = new ComboBox
+            {
+                Location = new Point(110, 392),
+                Size = new Size(90, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+            comboScrollDirection.Items.Add("向上滚动");
+            comboScrollDirection.Items.Add("向下滚动");
+            comboScrollDirection.SelectedIndex = jumpMole.ScrollUp ? 0 : 1;
+
+            var labelScrollCount = new Label
+            {
+                Text = "滚动次数:",
+                Location = new Point(40, 425),
+                Size = new Size(70, 20),
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+
+            var txtScrollCount = new TextBox
+            {
+                Text = jumpMole.ScrollCount.ToString(),
+                Location = new Point(40, 450),
+                Size = new Size(260, 25),
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+
+            var labelScrollWait = new Label
+            {
+                Text = "滚动后延时(ms):",
+                Location = new Point(40, 480),
+                Size = new Size(110, 20),
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+
+            var txtScrollWait = new TextBox
+            {
+                Text = jumpMole.ScrollWaitMs.ToString(),
+                Location = new Point(40, 505),
+                Size = new Size(260, 25),
+                Enabled = jumpMole.EnableMouseScroll,
+                Parent = form
+            };
+
+            // 复选框状态改变事件
+            chkSendKeyPress.CheckedChanged += (s, e) =>
+            {
+                bool enabled = chkSendKeyPress.Checked;
+                labelKeyPress.Enabled = enabled;
+                txtKeyPress.Enabled = enabled;
+                labelWaitTime.Enabled = enabled;
+                txtWaitTime.Enabled = enabled;
+                chkMouseScroll.Enabled = enabled;
+                
+                // 如果禁用按键输入，同时禁用鼠标滚动
+                if (!enabled)
+                {
+                    chkMouseScroll.Checked = false;
+                }
+                
+                // 禁用/启用跳转相关控件
+                label1.Enabled = !enabled;
+                comboGroup.Enabled = !enabled;
+                label2.Enabled = !enabled;
+                comboStep.Enabled = !enabled;
+            };
+
+            // 鼠标滚动复选框状态改变事件
+            chkMouseScroll.CheckedChanged += (s, e) =>
+            {
+                bool enabled = chkMouseScroll.Checked;
+                labelScrollDirection.Enabled = enabled;
+                comboScrollDirection.Enabled = enabled;
+                labelScrollCount.Enabled = enabled;
+                txtScrollCount.Enabled = enabled;
+                labelScrollWait.Enabled = enabled;
+                txtScrollWait.Enabled = enabled;
+            };
+
+            // 按键录制逻辑
+            string recordedKey = jumpMole.KeyPressDefinition;
+            bool hotkeysUnregistered = false;
+            
+            txtKeyPress.Enter += (s, e) =>
+            {
+                txtKeyPress.Text = "按下按键...";
+                recordedKey = "";
+                
+                // 暂时注销全局热键
+                UnregisterGlobalHotKeys();
+                hotkeysUnregistered = true;
+            };
+
+            txtKeyPress.Leave += (s, e) =>
+            {
+                // 恢复全局热键
+                if (hotkeysUnregistered)
+                {
+                    RegisterGlobalHotKeys();
+                    hotkeysUnregistered = false;
+                }
+                
+                // 如果没有录制到按键，恢复原值
+                if (string.IsNullOrEmpty(recordedKey))
+                {
+                    txtKeyPress.Text = jumpMole.KeyPressDefinition;
+                    recordedKey = jumpMole.KeyPressDefinition;
+                }
+            };
+
+            txtKeyPress.KeyDown += (s, e) =>
+            {
+                e.SuppressKeyPress = true;
+                
+                var keyParts = new List<string>();
+                
+                if (e.Control) keyParts.Add("Ctrl");
+                if (e.Shift) keyParts.Add("Shift");
+                if (e.Alt) keyParts.Add("Alt");
+                
+                var mainKey = e.KeyCode.ToString();
+                
+                if (mainKey != "ControlKey" && mainKey != "ShiftKey" && mainKey != "Menu")
+                {
+                    keyParts.Add(mainKey);
+                }
+                
+                if (keyParts.Count > 0)
+                {
+                    recordedKey = string.Join("+", keyParts);
+                    txtKeyPress.Text = recordedKey;
+                }
+            };
+            
+            // 对话框关闭时确保恢复热键
+            form.FormClosing += (s, e) =>
+            {
+                if (hotkeysUnregistered)
+                {
+                    RegisterGlobalHotKeys();
+                    hotkeysUnregistered = false;
+                }
+            };
+
             var btnUpdate = new Button
             {
                 Text = "更新",
-                Location = new Point(100, 310),
+                Location = new Point(100, 610),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -3386,7 +4088,7 @@ namespace WindowInspector
             var btnDelete = new Button
             {
                 Text = "删除",
-                Location = new Point(190, 310),
+                Location = new Point(190, 610),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -3394,7 +4096,7 @@ namespace WindowInspector
             var btnCancel = new Button
             {
                 Text = "取消",
-                Location = new Point(280, 310),
+                Location = new Point(280, 610),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -3402,12 +4104,78 @@ namespace WindowInspector
             // 更新按钮点击事件
             btnUpdate.Click += (s, e) =>
             {
-                if (comboGroup.SelectedIndex >= 0)
+                if (chkSendKeyPress.Checked)
                 {
+                    // 键盘按键输入模式
+                    if (string.IsNullOrEmpty(recordedKey))
+                    {
+                        MessageBox.Show("请先录制按键", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
+                    if (!int.TryParse(txtWaitTime.Text, out int waitMs) || waitMs < 0)
+                    {
+                        MessageBox.Show("等待时间必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
+                    // 验证鼠标滚动参数
+                    int scrollCount = 1;
+                    int scrollWaitMs = 100;
+                    if (chkMouseScroll.Checked)
+                    {
+                        if (!int.TryParse(txtScrollCount.Text, out scrollCount) || scrollCount < 1)
+                        {
+                            MessageBox.Show("滚动次数必须是正整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        
+                        if (!int.TryParse(txtScrollWait.Text, out scrollWaitMs) || scrollWaitMs < 0)
+                        {
+                            MessageBox.Show("滚动后延时必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                    }
+                    
+                    jumpMole.SendKeyPress = true;
+                    jumpMole.KeyPressDefinition = recordedKey;
+                    jumpMole.KeyPressWaitMs = waitMs;
+                    jumpMole.EnableMouseScroll = chkMouseScroll.Checked;
+                    jumpMole.ScrollUp = comboScrollDirection.SelectedIndex == 0;
+                    jumpMole.ScrollCount = scrollCount;
+                    jumpMole.ScrollWaitMs = scrollWaitMs;
+                    jumpMole.Name = $"⌨️ 按键: {recordedKey}";
+                    
+                    SaveMoles();
+                    
+                    var lstMoles = GetCurrentMoleListBox();
+                    if (lstMoles != null)
+                    {
+                        lstMoles.Items[moleIndex] = jumpMole.Name;
+                    }
+                    
+                    var logMsg = $"✅ 已更新按键步骤: {recordedKey} (等待 {waitMs}ms)";
+                    if (chkMouseScroll.Checked)
+                    {
+                        var direction = comboScrollDirection.SelectedIndex == 0 ? "向上" : "向下";
+                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms)";
+                    }
+                    AppendLog(logMsg, LogType.Success);
+                    form.Close();
+                }
+                else
+                {
+                    // 跳转模式
+                    if (comboGroup.SelectedIndex < 0)
+                    {
+                        MessageBox.Show("请选择跳转目标分组", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    
                     var targetGroupName = comboGroup.SelectedItem.ToString();
                     var stepIndex = comboStep.SelectedIndex - 1; // -1 表示从头开始
                     
-                    // 更新跳转步骤
+                    jumpMole.SendKeyPress = false;
                     jumpMole.JumpTargetGroup = targetGroupName;
                     jumpMole.JumpTargetStep = stepIndex;
                     jumpMole.Name = stepIndex < 0 
@@ -3416,7 +4184,6 @@ namespace WindowInspector
                     
                     SaveMoles();
                     
-                    // 刷新列表显示
                     var lstMoles = GetCurrentMoleListBox();
                     if (lstMoles != null)
                     {
@@ -3500,6 +4267,13 @@ namespace WindowInspector
             // 对话框关闭时释放预览图资源和清除引用
             form.FormClosed += (s, e) =>
             {
+                // 确保恢复热键（防止重复，先检查）
+                if (hotkeysUnregistered)
+                {
+                    RegisterGlobalHotKeys();
+                    hotkeysUnregistered = false;
+                }
+                
                 if (picPreview.Image != null)
                 {
                     var img = picPreview.Image;
@@ -3517,6 +4291,368 @@ namespace WindowInspector
             _currentEditDialog = form;
             
             form.Show();
+            
+            // 自动聚焦删除按钮
+            btnDelete.Focus();
+        }
+
+        private void ShowConfigStepDialog(MoleItem? configMole, int moleIndex)
+        {
+            var currentGroup = GetCurrentMoleGroup();
+            if (currentGroup == null)
+                return;
+            
+            bool isEdit = configMole != null;
+            
+            // 创建对话框
+            var form = new Form
+            {
+                Text = isEdit ? "编辑配置步骤" : "添加配置步骤",
+                Size = new Size(500, 400),
+                StartPosition = FormStartPosition.Manual,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+            
+            // 设置对话框位置：左边与主窗口右边对齐
+            form.Location = new Point(this.Right, this.Top + (this.Height - form.Height) / 2);
+            
+            int yPos = 20;
+            
+            // ===== 操作1: 切换配置 =====
+            var grpConfig = new GroupBox
+            {
+                Text = "操作1: 切换配置",
+                Location = new Point(20, yPos),
+                Size = new Size(450, 120),
+                Parent = form
+            };
+            
+            var chkSwitchConfig = new CheckBox
+            {
+                Text = "启用切换配置",
+                Location = new Point(10, 25),
+                Size = new Size(150, 25),
+                Checked = configMole?.SwitchConfig ?? false,
+                Parent = grpConfig
+            };
+            
+            var lblConfig = new Label
+            {
+                Text = "配置:",
+                Location = new Point(10, 55),
+                Size = new Size(60, 20),
+                Parent = grpConfig
+            };
+            
+            var cmbConfig = new ComboBox
+            {
+                Location = new Point(70, 52),
+                Size = new Size(200, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Parent = grpConfig
+            };
+            
+            // 加载配置列表
+            var configsDir = _configManager.ConfigsDirectory;
+            if (Directory.Exists(configsDir))
+            {
+                var configFiles = Directory.GetFiles(configsDir, "*.json");
+                foreach (var configFile in configFiles)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(configFile);
+                    cmbConfig.Items.Add(fileName);
+                }
+            }
+            
+            if (cmbConfig.Items.Count > 0)
+            {
+                if (isEdit && !string.IsNullOrEmpty(configMole.TargetConfigName))
+                {
+                    int idx = cmbConfig.Items.IndexOf(configMole.TargetConfigName);
+                    cmbConfig.SelectedIndex = idx >= 0 ? idx : 0;
+                }
+                else
+                {
+                    cmbConfig.SelectedIndex = 0;
+                }
+            }
+            
+            var lblConfigWait = new Label
+            {
+                Text = "等待:",
+                Location = new Point(280, 55),
+                Size = new Size(50, 20),
+                Parent = grpConfig
+            };
+            
+            var txtConfigWait = new TextBox
+            {
+                Location = new Point(330, 52),
+                Size = new Size(60, 25),
+                Text = (configMole?.ConfigSwitchWaitMs ?? 100).ToString(),
+                Parent = grpConfig
+            };
+            
+            var lblConfigMs = new Label
+            {
+                Text = "ms",
+                Location = new Point(395, 55),
+                Size = new Size(20, 20),
+                Parent = grpConfig
+            };
+            
+            yPos += 130;
+            
+            // ===== 操作2: 切换填充内容 =====
+            var grpText = new GroupBox
+            {
+                Text = "操作2: 切换填充内容",
+                Location = new Point(20, yPos),
+                Size = new Size(450, 120),
+                Parent = form
+            };
+            
+            var chkSwitchText = new CheckBox
+            {
+                Text = "启用切换填充内容",
+                Location = new Point(10, 25),
+                Size = new Size(180, 25),
+                Checked = configMole?.SwitchTextContent ?? false,
+                Parent = grpText
+            };
+            
+            var lblText = new Label
+            {
+                Text = "内容:",
+                Location = new Point(10, 55),
+                Size = new Size(60, 20),
+                Parent = grpText
+            };
+            
+            var cmbText = new ComboBox
+            {
+                Location = new Point(70, 52),
+                Size = new Size(200, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Parent = grpText
+            };
+            
+            // 加载文本内容列表
+            foreach (var savedText in _config.SavedTexts)
+            {
+                cmbText.Items.Add(savedText.Name);
+            }
+            
+            if (cmbText.Items.Count > 0)
+            {
+                if (isEdit && !string.IsNullOrEmpty(configMole.TargetTextName))
+                {
+                    int idx = cmbText.Items.IndexOf(configMole.TargetTextName);
+                    cmbText.SelectedIndex = idx >= 0 ? idx : 0;
+                }
+                else
+                {
+                    cmbText.SelectedIndex = 0;
+                }
+            }
+            
+            var lblTextWait = new Label
+            {
+                Text = "等待:",
+                Location = new Point(280, 55),
+                Size = new Size(50, 20),
+                Parent = grpText
+            };
+            
+            var txtTextWait = new TextBox
+            {
+                Location = new Point(330, 52),
+                Size = new Size(60, 25),
+                Text = (configMole?.TextSwitchWaitMs ?? 100).ToString(),
+                Parent = grpText
+            };
+            
+            var lblTextMs = new Label
+            {
+                Text = "ms",
+                Location = new Point(395, 55),
+                Size = new Size(20, 20),
+                Parent = grpText
+            };
+            
+            yPos += 130;
+            
+            // 提示信息
+            var lblHint = new Label
+            {
+                Text = "执行顺序: 配置切换 → 内容切换",
+                Location = new Point(20, yPos),
+                Size = new Size(450, 20),
+                ForeColor = Color.Gray,
+                Parent = form
+            };
+            
+            yPos += 30;
+            
+            // 按钮
+            var btnSave = new Button
+            {
+                Text = isEdit ? "保存" : "添加",
+                Location = new Point(290, yPos),
+                Size = new Size(80, 30),
+                Parent = form
+            };
+            
+            var btnCancel = new Button
+            {
+                Text = "取消",
+                Location = new Point(380, yPos),
+                Size = new Size(80, 30),
+                Parent = form
+            };
+            
+            // 如果是编辑模式，添加删除按钮
+            Button? btnDelete = null;
+            if (isEdit)
+            {
+                btnDelete = new Button
+                {
+                    Text = "删除",
+                    Location = new Point(20, yPos),
+                    Size = new Size(80, 30),
+                    Parent = form
+                };
+                
+                btnDelete.Click += (s, e) =>
+                {
+                    var result = MessageBox.Show(
+                        $"确定要删除配置步骤吗？",
+                        "确认删除",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+                    
+                    if (result == DialogResult.Yes)
+                    {
+                        currentGroup.Moles.RemoveAt(moleIndex);
+                        SaveMoles();
+                        RefreshCurrentMoleList();
+                        AppendLog($"✅ 已删除配置步骤", LogType.Success);
+                        form.Close();
+                    }
+                };
+            }
+            
+            // 保存按钮
+            btnSave.Click += (s, e) =>
+            {
+                if (!chkSwitchConfig.Checked && !chkSwitchText.Checked)
+                {
+                    MessageBox.Show("请至少选择一个操作", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                if (chkSwitchConfig.Checked && cmbConfig.SelectedIndex < 0)
+                {
+                    MessageBox.Show("请选择目标配置", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                if (chkSwitchText.Checked && cmbText.SelectedIndex < 0)
+                {
+                    MessageBox.Show("请选择目标填充内容", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                if (!int.TryParse(txtConfigWait.Text, out int configWait) || configWait < 0)
+                {
+                    MessageBox.Show("配置切换等待时间必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                if (!int.TryParse(txtTextWait.Text, out int textWait) || textWait < 0)
+                {
+                    MessageBox.Show("内容切换等待时间必须是非负整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                // 创建或更新配置步骤
+                MoleItem stepMole;
+                if (isEdit)
+                {
+                    stepMole = configMole!;
+                }
+                else
+                {
+                    stepMole = new MoleItem
+                    {
+                        IsConfigStep = true,
+                        IsEnabled = true
+                    };
+                }
+                
+                stepMole.SwitchConfig = chkSwitchConfig.Checked;
+                stepMole.TargetConfigName = cmbConfig.SelectedIndex >= 0 ? cmbConfig.Items[cmbConfig.SelectedIndex].ToString() ?? "" : "";
+                stepMole.ConfigSwitchWaitMs = configWait;
+                stepMole.SwitchTextContent = chkSwitchText.Checked;
+                stepMole.TargetTextName = cmbText.SelectedIndex >= 0 ? cmbText.Items[cmbText.SelectedIndex].ToString() ?? "" : "";
+                stepMole.TextSwitchWaitMs = textWait;
+                
+                // 生成步骤名称
+                if (stepMole.SwitchConfig && stepMole.SwitchTextContent)
+                {
+                    stepMole.Name = $"⚙️ 配置: {stepMole.TargetConfigName} → 内容: {stepMole.TargetTextName}";
+                }
+                else if (stepMole.SwitchConfig)
+                {
+                    stepMole.Name = $"⚙️ 配置: {stepMole.TargetConfigName}";
+                }
+                else if (stepMole.SwitchTextContent)
+                {
+                    stepMole.Name = $"⚙️ 内容: {stepMole.TargetTextName}";
+                }
+                else
+                {
+                    stepMole.Name = "⚙️ 配置步骤 (未设置)";
+                }
+                
+                if (!isEdit)
+                {
+                    currentGroup.Moles.Add(stepMole);
+                }
+                
+                SaveMoles();
+                RefreshCurrentMoleList();
+                
+                var action = isEdit ? "已更新" : "已添加";
+                AppendLog($"✅ {action}配置步骤: {stepMole.Name}", LogType.Success);
+                form.Close();
+            };
+            
+            btnCancel.Click += (s, e) => form.Close();
+            
+            // 应用主题
+            _themeManager.ApplyTheme(form);
+            
+            // 窗口关闭时清除引用
+            form.FormClosed += (s, e) =>
+            {
+                if (_currentEditDialog == form)
+                {
+                    _currentEditDialog = null;
+                }
+            };
+            
+            // 显示对话框
+            _currentEditDialog = form;
+            form.Show();
+            
+            // 如果是编辑模式，自动聚焦删除按钮
+            if (isEdit && btnDelete != null)
+            {
+                btnDelete.Focus();
+            }
         }
 
         private void ShowMoleDeleteConfirmDialog(MoleItem mole, int stepIndex)

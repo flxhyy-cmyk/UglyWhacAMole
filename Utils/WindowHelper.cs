@@ -114,6 +114,8 @@ namespace WindowInspector.Utils
         public const int VK_F6 = 0x75;
         public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        public const uint MOUSEEVENTF_WHEEL = 0x0800;
+        public const int WHEEL_DELTA = 120;
         
         // 热键修饰符
         public const uint MOD_NONE = 0x0000;

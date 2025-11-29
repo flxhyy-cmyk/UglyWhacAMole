@@ -25,6 +25,20 @@ namespace WindowInspector.Models
         public bool StopHunting { get; set; } = false; // 执行到此步骤时停止打地鼠
         public bool WaitAfterClick { get; set; } = false; // 点击后等待
         public int WaitAfterClickMs { get; set; } = 1000; // 点击后等待的毫秒数
+        public bool SendKeyPress { get; set; } = false; // 发送键盘按键输入（跳转步骤的替代选项）
+        public string KeyPressDefinition { get; set; } = ""; // 按键定义（如 "Ctrl+C", "Enter", "F1"）
+        public int KeyPressWaitMs { get; set; } = 100; // 按键输入后等待的毫秒数
+        public bool EnableMouseScroll { get; set; } = false; // 是否启用鼠标滚动（在按键输入之后执行）
+        public bool ScrollUp { get; set; } = true; // true=向上滚动, false=向下滚动
+        public int ScrollCount { get; set; } = 1; // 滚动次数
+        public int ScrollWaitMs { get; set; } = 100; // 滚动后等待时间（毫秒）
+        public bool IsConfigStep { get; set; } = false; // 是否为配置步骤
+        public bool SwitchConfig { get; set; } = false; // 是否切换配置
+        public string TargetConfigName { get; set; } = ""; // 目标配置名称
+        public int ConfigSwitchWaitMs { get; set; } = 100; // 配置切换后等待时间（毫秒）
+        public bool SwitchTextContent { get; set; } = false; // 是否切换填充内容
+        public string TargetTextName { get; set; } = ""; // 目标文本名称
+        public int TextSwitchWaitMs { get; set; } = 100; // 内容切换后等待时间（毫秒）
     }
 
     /// <summary>
@@ -34,6 +48,5 @@ namespace WindowInspector.Models
     {
         public string Name { get; set; } = "默认";
         public List<MoleItem> Moles { get; set; } = new();
-        public List<Point> IdleClickPositions { get; set; } = new();
     }
 }

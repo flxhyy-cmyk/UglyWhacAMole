@@ -31,6 +31,8 @@ namespace WindowInspector.Services
         public event EventHandler<string>? LogMessage;
         public event EventHandler<MoleFoundEventArgs>? MoleFound;
         public event EventHandler? HuntingStopped;
+        public event EventHandler<string>? OnConfigSwitchRequested;
+        public event EventHandler<string>? OnTextContentSwitchRequested;
         
         public MoleHunter()
         {
@@ -58,7 +60,7 @@ namespace WindowInspector.Services
         /// <summary>
         /// 开始打地鼠
         /// </summary>
-        public void Start(List<MoleItem> moles, List<Point>? idleClickPositions = null, List<MoleGroup>? allMoleGroups = null)
+        public void Start(List<MoleItem> moles, List<MoleGroup>? allMoleGroups = null)
         {
             if (_isRunning)
                 return;
@@ -67,7 +69,7 @@ namespace WindowInspector.Services
             _cts = new CancellationTokenSource();
             _allMoleGroups = allMoleGroups; // 保存所有分组
             
-            Task.Run(() => HuntingLoop(moles, idleClickPositions, _cts.Token));
+            Task.Run(() => HuntingLoop(moles, _cts.Token));
             LogMessage?.Invoke(this, "🎯 打地鼠已启动 (使用 Emgu.CV 原生识图)");
         }
         
@@ -95,7 +97,7 @@ namespace WindowInspector.Services
         
         public bool IsRunning => _isRunning;
         
-        private async Task HuntingLoop(List<MoleItem> moles, List<Point>? idleClickPositions, CancellationToken token)
+        private async Task HuntingLoop(List<MoleItem> moles, CancellationToken token)
         {
             try
             {
@@ -104,12 +106,12 @@ namespace WindowInspector.Services
                     if (_fullScreenMatch)
                     {
                         // 全图匹配模式
-                        await FullScreenMatchLoop(moles, idleClickPositions, token);
+                        await FullScreenMatchLoop(moles, token);
                     }
                     else
                     {
                         // 顺序匹配模式（原逻辑）
-                        await SequentialMatchLoop(moles, idleClickPositions, token);
+                        await SequentialMatchLoop(moles, token);
                     }
                     
                     // 一轮结束，短暂延迟后开始下一轮
@@ -133,7 +135,7 @@ namespace WindowInspector.Services
         /// <summary>
         /// 全图匹配模式：一次性识别所有截图，找到就点击，没找到就执行空击
         /// </summary>
-        private async Task FullScreenMatchLoop(List<MoleItem> moles, List<Point>? idleClickPositions, CancellationToken token)
+        private async Task FullScreenMatchLoop(List<MoleItem> moles, CancellationToken token)
         {
             // 获取所有启用的截图地鼠（排除空击地鼠）
             var screenshotMoles = moles.Where(m => m.IsEnabled && !m.IsIdleClick && !string.IsNullOrEmpty(m.ImagePath)).ToList();
@@ -199,14 +201,17 @@ namespace WindowInspector.Services
                 // 没有找到任何匹配，执行空击步骤
                 LogMessage?.Invoke(this, "⏭️ 全图识别无匹配，执行空击步骤");
                 
-                if (idleClickPositions != null && idleClickPositions.Count > 0)
+                // 从moles列表中获取所有启用的空击步骤
+                var idleClickMoles = moles.Where(m => m.IsEnabled && m.IsIdleClick && m.IdleClickPosition.HasValue).ToList();
+                
+                if (idleClickMoles.Count > 0)
                 {
-                    foreach (var pos in idleClickPositions)
+                    foreach (var idleMole in idleClickMoles)
                     {
                         if (token.IsCancellationRequested) break;
                         
-                        ClickAt(pos);
-                        LogMessage?.Invoke(this, $"💤 空击 ({pos.X},{pos.Y})");
+                        ClickAt(idleMole.IdleClickPosition.Value);
+                        LogMessage?.Invoke(this, $"💤 空击 ({idleMole.IdleClickPosition.Value.X},{idleMole.IdleClickPosition.Value.Y})");
                         await Task.Delay(50, token);
                     }
                 }
@@ -221,23 +226,23 @@ namespace WindowInspector.Services
         /// <summary>
         /// 顺序匹配模式：按列表顺序逐个检查地鼠（原逻辑）
         /// </summary>
-        private async Task SequentialMatchLoop(List<MoleItem> moles, List<Point>? idleClickPositions, CancellationToken token)
+        private async Task SequentialMatchLoop(List<MoleItem> moles, CancellationToken token)
         {
-            await ExecuteMoleSequence(moles, idleClickPositions, token);
+            await ExecuteMoleSequence(moles, token);
         }
 
         /// <summary>
         /// 执行地鼠序列（支持跳转）
         /// </summary>
-        private async Task ExecuteMoleSequence(List<MoleItem> moles, List<Point>? idleClickPositions, CancellationToken token)
+        private async Task ExecuteMoleSequence(List<MoleItem> moles, CancellationToken token)
         {
-            await ExecuteMoleSequenceInternal(moles, idleClickPositions, token, moles.Count, 0);
+            await ExecuteMoleSequenceInternal(moles, token, moles.Count, 0);
         }
 
         /// <summary>
         /// 内部递归执行地鼠序列（支持跳转）
         /// </summary>
-        private async Task ExecuteMoleSequenceInternal(List<MoleItem> moles, List<Point>? idleClickPositions, CancellationToken token, int totalSteps, int startIndex = 0)
+        private async Task ExecuteMoleSequenceInternal(List<MoleItem> moles, CancellationToken token, int totalSteps, int startIndex = 0)
         {
             int currentStep = 0;
             
@@ -250,43 +255,143 @@ namespace WindowInspector.Services
                 if (!mole.IsEnabled || token.IsCancellationRequested)
                     continue;
                 
+                // 如果是配置步骤
+                if (mole.IsConfigStep)
+                {
+                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⚙️ 配置步骤: {mole.Name}");
+                    
+                    // 执行配置切换
+                    if (mole.SwitchConfig)
+                    {
+                        try
+                        {
+                            OnConfigSwitchRequested?.Invoke(this, mole.TargetConfigName);
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 已切换配置: {mole.TargetConfigName}");
+                            
+                            if (mole.ConfigSwitchWaitMs > 0)
+                            {
+                                await Task.Delay(mole.ConfigSwitchWaitMs, token);
+                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.ConfigSwitchWaitMs}ms");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 配置切换失败: {ex.Message}");
+                        }
+                    }
+                    
+                    // 执行填充内容切换
+                    if (mole.SwitchTextContent)
+                    {
+                        try
+                        {
+                            OnTextContentSwitchRequested?.Invoke(this, mole.TargetTextName);
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 已切换填充内容: {mole.TargetTextName}");
+                            
+                            if (mole.TextSwitchWaitMs > 0)
+                            {
+                                await Task.Delay(mole.TextSwitchWaitMs, token);
+                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.TextSwitchWaitMs}ms");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 填充内容切换失败: {ex.Message}");
+                        }
+                    }
+                    
+                    await Task.Delay(50, token);
+                    continue;
+                }
+                
                 // 如果是跳转步骤
                 if (mole.IsJump)
                 {
-                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔗 跳转到 {mole.JumpTargetGroup}");
-                    
-                    // 查找目标分组
-                    if (_allMoleGroups != null)
+                    // 检查是否为键盘按键输入模式
+                    if (mole.SendKeyPress)
                     {
-                        var targetGroup = _allMoleGroups.FirstOrDefault(g => g.Name == mole.JumpTargetGroup);
-                        if (targetGroup != null)
+                        // 键盘按键输入模式
+                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⌨️ 发送按键: {mole.KeyPressDefinition}");
+                        
+                        try
                         {
-                            // 确定起始步骤
-                            int targetStartIndex = mole.JumpTargetStep >= 0 ? mole.JumpTargetStep : 0;
+                            SendKeyPress(mole.KeyPressDefinition);
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 按键已发送");
                             
-                            if (targetStartIndex < targetGroup.Moles.Count)
+                            // 等待指定时间
+                            if (mole.KeyPressWaitMs > 0)
                             {
-                                // 执行目标分组的步骤
-                                if (mole.JumpTargetStep >= 0)
+                                await Task.Delay(mole.KeyPressWaitMs, token);
+                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.KeyPressWaitMs}ms");
+                            }
+                            
+                            // 如果启用了鼠标滚动操作
+                            if (mole.EnableMouseScroll)
+                            {
+                                var direction = mole.ScrollUp ? "向上" : "向下";
+                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🖱️ 鼠标{direction}滚动 {mole.ScrollCount} 次");
+                                
+                                try
                                 {
-                                    LogMessage?.Invoke(this, $"📂 进入分组: {targetGroup.Name} (从步骤 {targetStartIndex + 1} 开始)");
+                                    PerformMouseScroll(mole.ScrollUp, mole.ScrollCount);
+                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 滚动完成");
+                                    
+                                    // 滚动后等待
+                                    if (mole.ScrollWaitMs > 0)
+                                    {
+                                        await Task.Delay(mole.ScrollWaitMs, token);
+                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 滚动后已等待 {mole.ScrollWaitMs}ms");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 鼠标滚动失败: {ex.Message}");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 按键发送失败: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        // 跳转模式
+                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔗 跳转到 {mole.JumpTargetGroup}");
+                        
+                        // 查找目标分组
+                        if (_allMoleGroups != null)
+                        {
+                            var targetGroup = _allMoleGroups.FirstOrDefault(g => g.Name == mole.JumpTargetGroup);
+                            if (targetGroup != null)
+                            {
+                                // 确定起始步骤
+                                int targetStartIndex = mole.JumpTargetStep >= 0 ? mole.JumpTargetStep : 0;
+                                
+                                if (targetStartIndex < targetGroup.Moles.Count)
+                                {
+                                    // 执行目标分组的步骤
+                                    if (mole.JumpTargetStep >= 0)
+                                    {
+                                        LogMessage?.Invoke(this, $"📂 进入分组: {targetGroup.Name} (从步骤 {targetStartIndex + 1} 开始)");
+                                    }
+                                    else
+                                    {
+                                        LogMessage?.Invoke(this, $"📂 进入分组: {targetGroup.Name}");
+                                    }
+                                    
+                                    await ExecuteMoleSequenceInternal(targetGroup.Moles, token, totalSteps, targetStartIndex);
+                                    LogMessage?.Invoke(this, $"📂 返回分组");
                                 }
                                 else
                                 {
-                                    LogMessage?.Invoke(this, $"📂 进入分组: {targetGroup.Name}");
+                                    LogMessage?.Invoke(this, $"⚠️ 目标步骤索引超出范围: {targetStartIndex}");
                                 }
-                                
-                                await ExecuteMoleSequenceInternal(targetGroup.Moles, targetGroup.IdleClickPositions, token, totalSteps, targetStartIndex);
-                                LogMessage?.Invoke(this, $"📂 返回分组");
                             }
                             else
                             {
-                                LogMessage?.Invoke(this, $"⚠️ 目标步骤索引超出范围: {targetStartIndex}");
+                                LogMessage?.Invoke(this, $"⚠️ 未找到目标分组: {mole.JumpTargetGroup}");
                             }
-                        }
-                        else
-                        {
-                            LogMessage?.Invoke(this, $"⚠️ 未找到目标分组: {mole.JumpTargetGroup}");
                         }
                     }
                     
@@ -546,6 +651,85 @@ namespace WindowInspector.Services
             
             // 恢复鼠标位置（可选）
             // WindowHelper.SetCursorPos(oldPos.X, oldPos.Y);
+        }
+
+        /// <summary>
+        /// 发送键盘按键
+        /// </summary>
+        private void SendKeyPress(string keyDefinition)
+        {
+            if (string.IsNullOrEmpty(keyDefinition))
+                return;
+
+            // 解析按键定义（如 "Ctrl+C", "Enter", "F1"）
+            var parts = keyDefinition.Split('+');
+            var modifiers = new List<Keys>();
+            Keys mainKey = Keys.None;
+
+            foreach (var part in parts)
+            {
+                var trimmedPart = part.Trim();
+                
+                if (trimmedPart.Equals("Ctrl", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers.Add(Keys.ControlKey);
+                }
+                else if (trimmedPart.Equals("Shift", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers.Add(Keys.ShiftKey);
+                }
+                else if (trimmedPart.Equals("Alt", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers.Add(Keys.Menu);
+                }
+                else
+                {
+                    // 主键
+                    if (Enum.TryParse<Keys>(trimmedPart, true, out var parsedKey))
+                    {
+                        mainKey = parsedKey;
+                    }
+                }
+            }
+
+            // 按下修饰键
+            foreach (var modifier in modifiers)
+            {
+                WindowHelper.keybd_event((byte)modifier, 0, 0, 0);
+                Thread.Sleep(10);
+            }
+
+            // 按下主键
+            if (mainKey != Keys.None)
+            {
+                WindowHelper.keybd_event((byte)mainKey, 0, 0, 0);
+                Thread.Sleep(10);
+                WindowHelper.keybd_event((byte)mainKey, 0, WindowHelper.KEYEVENTF_KEYUP, 0);
+            }
+
+            // 释放修饰键（逆序）
+            for (int i = modifiers.Count - 1; i >= 0; i--)
+            {
+                WindowHelper.keybd_event((byte)modifiers[i], 0, WindowHelper.KEYEVENTF_KEYUP, 0);
+                Thread.Sleep(10);
+            }
+        }
+
+        /// <summary>
+        /// 执行鼠标滚动操作
+        /// </summary>
+        /// <param name="scrollUp">true=向上滚动, false=向下滚动</param>
+        /// <param name="scrollCount">滚动次数</param>
+        private void PerformMouseScroll(bool scrollUp, int scrollCount)
+        {
+            // 滚动方向：正值向上，负值向下
+            int scrollAmount = scrollUp ? WindowHelper.WHEEL_DELTA : -WindowHelper.WHEEL_DELTA;
+            
+            for (int i = 0; i < scrollCount; i++)
+            {
+                WindowHelper.mouse_event(WindowHelper.MOUSEEVENTF_WHEEL, 0, 0, (uint)scrollAmount, UIntPtr.Zero);
+                Thread.Sleep(50); // 每次滚动之间短暂延迟
+            }
         }
 
         public void Dispose()
