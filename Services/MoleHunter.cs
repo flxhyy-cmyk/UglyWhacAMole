@@ -496,8 +496,68 @@ namespace WindowInspector.Services
                     }
                     else
                     {
-                        // 正常模式：扫描一次
-                        var matchResult = FindImageWithEmgu(mole.ImagePath, mole.SimilarityThreshold);
+                        // 正常模式：扫描一次（或带超时的等待模式）
+                        ImageMatchResult? matchResult = null;
+                        
+                        // 如果启用了"等待超时后返回上一步"
+                        if (mole.ReturnToPreviousOnTimeout && mole.TimeoutMs > 0)
+                        {
+                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏳ 等待图像出现（超时: {mole.TimeoutMs}ms）: {mole.Name}");
+                            
+                            var startTime = DateTime.Now;
+                            int scanCount = 0;
+                            
+                            // 在超时时间内持续扫描
+                            while (!token.IsCancellationRequested)
+                            {
+                                matchResult = FindImageWithEmgu(mole.ImagePath, mole.SimilarityThreshold);
+                                scanCount++;
+                                
+                                if (matchResult != null && matchResult.Found)
+                                {
+                                    // 找到了，退出等待循环
+                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已出现，匹配阈值:{matchResult.Confidence:F2} (扫描了 {scanCount} 次)");
+                                    break;
+                                }
+                                
+                                // 检查是否超时
+                                var elapsed = (DateTime.Now - startTime).TotalMilliseconds;
+                                if (elapsed >= mole.TimeoutMs)
+                                {
+                                    // 超时了，返回上一步
+                                    if (i > startIndex)
+                                    {
+                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏰ 等待超时（{mole.TimeoutMs}ms），返回上一个步骤");
+                                        i = i - 2; // -2 是因为循环会 +1，所以实际是回到上一步
+                                        currentStep--; // 步骤计数也要回退
+                                        await Task.Delay(50, token);
+                                        break; // 跳出while循环，继续for循环
+                                    }
+                                    else
+                                    {
+                                        // 已经是第一步，无法返回上一步
+                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏰ 等待超时（{mole.TimeoutMs}ms），已是第一步，跳过");
+                                        matchResult = null; // 确保matchResult为null，后续会跳过
+                                        break;
+                                    }
+                                }
+                                
+                                // 等待一小段时间后再次扫描
+                                await Task.Delay(100, token);
+                            }
+                            
+                            // 如果是因为超时返回上一步，直接continue到下一次循环
+                            if (matchResult == null || !matchResult.Found)
+                            {
+                                await Task.Delay(50, token);
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            // 正常模式：扫描一次
+                            matchResult = FindImageWithEmgu(mole.ImagePath, mole.SimilarityThreshold);
+                        }
                         
                         if (matchResult != null && matchResult.Found)
                         {
@@ -580,7 +640,7 @@ namespace WindowInspector.Services
                             }
                             else
                             {
-                                // 未找到地鼠，跳过此步骤
+                                // 未找到地鼠，跳过此步骤（默认行为）
                                 string confidenceInfo = matchResult != null ? $" | 最高置信度:{matchResult.Confidence:F2} (阈值:{mole.SimilarityThreshold:F2})" : "";
                                 LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏭️ 截图地鼠未找到 (跳过){confidenceInfo}");
                             }

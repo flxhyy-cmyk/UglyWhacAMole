@@ -29,7 +29,14 @@ namespace WindowInspector
         private TabControl tabMain;
         private TabPage tabPageMain;
         private TabPage tabPageMole;
+        private TabPage tabPageLoadSettings;
         private CheckBox chkMoleEnabled;
+        private CheckBox chkAutoLoadGroups;
+        private Button btnLoadSelectedGroups;
+        private Button btnExportGroups;
+        private Button btnImportGroups;
+        private CheckBox chkSelectAllGroups;
+        private CheckedListBox lstMoleGroupsSelection;
         private Button btnCaptureMole;
         private Button btnSetIdleClick;
         private Button btnAddConfigStep;
@@ -87,6 +94,15 @@ namespace WindowInspector
             tabPageMole = new TabPage
             {
                 Text = "打地鼠",
+                Padding = new Padding(0),
+                Margin = new Padding(0),
+                Parent = tabMain
+            };
+
+            // 显示设置标签页
+            tabPageLoadSettings = new TabPage
+            {
+                Text = "显示设置",
                 Padding = new Padding(0),
                 Margin = new Padding(0),
                 Parent = tabMain
@@ -254,6 +270,9 @@ namespace WindowInspector
 
             // 打地鼠界面
             InitializeMoleTab();
+            
+            // 显示设置界面
+            InitializeLoadSettingsTab();
         }
 
         private void InitializeMoleTab()
@@ -402,6 +421,78 @@ namespace WindowInspector
             tabMoleGroups.MouseDoubleClick += TabMoleGroups_MouseDoubleClick;
         }
 
+        private void InitializeLoadSettingsTab()
+        {
+            // 自动显示复选框
+            chkAutoLoadGroups = new CheckBox
+            {
+                Text = "启用自动显示",
+                Location = new Point(10, 10),
+                Size = new Size(150, 25),
+                Parent = tabPageLoadSettings
+            };
+            chkAutoLoadGroups.CheckedChanged += ChkAutoLoadGroups_CheckedChanged;
+
+            // 显示按钮
+            btnLoadSelectedGroups = new Button
+            {
+                Text = "显示所选分组",
+                Location = new Point(170, 7),
+                Size = new Size(120, 30),
+                Parent = tabPageLoadSettings
+            };
+            btnLoadSelectedGroups.Click += BtnLoadSelectedGroups_Click;
+
+            // 导出按钮
+            btnExportGroups = new Button
+            {
+                Text = "导出",
+                Location = new Point(300, 7),
+                Size = new Size(70, 30),
+                Parent = tabPageLoadSettings
+            };
+            btnExportGroups.Click += BtnExportGroups_Click;
+
+            // 导入按钮
+            btnImportGroups = new Button
+            {
+                Text = "导入",
+                Location = new Point(380, 7),
+                Size = new Size(70, 30),
+                Parent = tabPageLoadSettings
+            };
+            btnImportGroups.Click += BtnImportGroups_Click;
+
+            // 分组列表标签
+            var lblGroups = new Label
+            {
+                Text = "选择要显示的分组:",
+                Location = new Point(10, 45),
+                Size = new Size(200, 20),
+                Parent = tabPageLoadSettings
+            };
+
+            // 全选复选框
+            chkSelectAllGroups = new CheckBox
+            {
+                Text = "全选/取消全选",
+                Location = new Point(220, 43),
+                Size = new Size(150, 25),
+                Parent = tabPageLoadSettings
+            };
+            chkSelectAllGroups.CheckedChanged += ChkSelectAllGroups_CheckedChanged;
+
+            // 分组选择列表
+            lstMoleGroupsSelection = new CheckedListBox
+            {
+                Location = new Point(10, 70),
+                Size = new Size(tabPageLoadSettings.ClientSize.Width - 20, tabPageLoadSettings.ClientSize.Height - 80),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                CheckOnClick = true,
+                Parent = tabPageLoadSettings
+            };
+            lstMoleGroupsSelection.ItemCheck += LstMoleGroupsSelection_ItemCheck;
+        }
 
     }
 }

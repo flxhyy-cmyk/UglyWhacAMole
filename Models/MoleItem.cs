@@ -39,6 +39,8 @@ namespace WindowInspector.Models
         public bool SwitchTextContent { get; set; } = false; // 是否切换填充内容
         public string TargetTextName { get; set; } = ""; // 目标文本名称
         public int TextSwitchWaitMs { get; set; } = 100; // 内容切换后等待时间（毫秒）
+        public bool ReturnToPreviousOnTimeout { get; set; } = false; // 等待超时后返回上一个步骤
+        public int TimeoutMs { get; set; } = 5000; // 超时时间（毫秒），默认5000ms
     }
 
     /// <summary>

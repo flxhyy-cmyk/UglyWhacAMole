@@ -47,31 +47,39 @@ namespace WindowInspector
 
         public MainForm()
         {
-            InitializeComponent();
-            _configManager = new ConfigManager();
-            _windowSelector = new WindowSelector();
-            _inputRecorder = new InputRecorder();
-            _textFiller = new TextFiller();
-            _excelService = new ExcelService();
-            _moleHunter = new MoleHunter();
-            _themeManager = new ThemeManager(_configManager);
-            _config = new WindowConfig();
-            
-            // 初始化地鼠目录（保存到AppData）
-            _molesDirectory = Path.Combine(_configManager.ProgramDirectory, "moles");
-            if (!Directory.Exists(_molesDirectory))
-                Directory.CreateDirectory(_molesDirectory);
-            
-            SetupEventHandlers();
-            LoadConfiguration();
-            LoadLastExcelPath();
-            LoadMoles();
-            ProcessPendingDeletions(); // 处理上次未能删除的文件
-            RegisterGlobalHotKeys();
-            
-            // 应用主题
-            _themeManager.ApplyTheme(this);
-            ApplyTitleBarTheme();
+            try
+            {
+                InitializeComponent();
+                _configManager = new ConfigManager();
+                _windowSelector = new WindowSelector();
+                _inputRecorder = new InputRecorder();
+                _textFiller = new TextFiller();
+                _excelService = new ExcelService();
+                _moleHunter = new MoleHunter();
+                _themeManager = new ThemeManager(_configManager);
+                _config = new WindowConfig();
+                
+                // 初始化地鼠目录（保存到AppData）
+                _molesDirectory = Path.Combine(_configManager.ProgramDirectory, "moles");
+                if (!Directory.Exists(_molesDirectory))
+                    Directory.CreateDirectory(_molesDirectory);
+                
+                SetupEventHandlers();
+                LoadConfiguration();
+                LoadLastExcelPath();
+                LoadMoles();
+                ProcessPendingDeletions(); // 处理上次未能删除的文件
+                RegisterGlobalHotKeys();
+                
+                // 应用主题
+                _themeManager.ApplyTheme(this);
+                ApplyTitleBarTheme();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"初始化失败: {ex.Message}\n\n{ex.StackTrace}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw;
+            }
         }
 
         private void ApplyTitleBarTheme()
@@ -1833,21 +1841,46 @@ namespace WindowInspector
                 _moleGroups.Add(defaultGroup);
             }
             
-            // 创建标签页
-            for (int i = 0; i < _moleGroups.Count; i++)
+            // 初始化显示设置界面
+            try
             {
-                CreateMoleGroupTab(_moleGroups[i], i);
+                LoadMoleGroupsSelection();
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"⚠️ 加载分组选择界面失败: {ex.Message}", LogType.Warning);
             }
             
-            // 选中第一个标签页
-            if (tabMoleGroups.TabPages.Count > 0)
+            // 根据配置决定是否自动显示分组
+            if (_config.AutoLoadMoleGroups)
             {
-                tabMoleGroups.SelectedIndex = 0;
-                _currentMoleGroupIndex = 0;
+                // 启用了自动显示，显示选中的分组
+                if (_config.SelectedMoleGroups.Count > 0)
+                {
+                    LoadSelectedMoleGroups();
+                    AppendLog($"📂 已自动显示 {tabMoleGroups.TabPages.Count} 个选中的分组", LogType.Info);
+                }
+                else
+                {
+                    // 没有选中任何分组，默认显示第一个
+                    if (_moleGroups.Count > 0)
+                    {
+                        CreateMoleGroupTab(_moleGroups[0], 0);
+                        tabMoleGroups.SelectedIndex = 0;
+                        _currentMoleGroupIndex = 0;
+                        AppendLog($"📂 已自动显示默认分组", LogType.Info);
+                    }
+                }
+            }
+            else
+            {
+                // 未启用自动显示，不显示任何分组到标签页
+                // 用户需要手动在"显示设置"界面点击"显示选中的分组"按钮
+                AppendLog($"ℹ️ 已加载 {_moleGroups.Count} 个地鼠分组配置", LogType.Info);
+                AppendLog($"💡 请在【显示设置】标签页选择要显示的分组", LogType.Info);
             }
             
             UpdateIdleClickLabel();
-            AppendLog($"📂 已加载 {_moleGroups.Count} 个地鼠分组", LogType.Info);
         }
         
         private void CreateMoleGroupTab(MoleGroup group, int index)
@@ -4867,6 +4900,43 @@ namespace WindowInspector
                 Parent = dialog
             };
             
+            // 等待超时后返回上一步复选框
+            var chkReturnToPreviousOnTimeout = new CheckBox
+            {
+                Text = "等待超时后返回上一个步骤",
+                Location = new Point(20, dialog.Height - 170),
+                Size = new Size(200, 25),
+                Checked = mole.ReturnToPreviousOnTimeout,
+                Parent = dialog
+            };
+            
+            // 超时时间标签
+            var lblTimeoutLabel = new Label
+            {
+                Text = "超时时间:",
+                Location = new Point(230, dialog.Height - 167),
+                Size = new Size(70, 20),
+                Parent = dialog
+            };
+            
+            // 超时时间输入框
+            var txtTimeout = new TextBox
+            {
+                Text = mole.TimeoutMs.ToString(),
+                Location = new Point(300, dialog.Height - 170),
+                Size = new Size(60, 25),
+                Parent = dialog
+            };
+            
+            // 超时时间单位标签
+            var lblTimeoutUnit = new Label
+            {
+                Text = "ms",
+                Location = new Point(365, dialog.Height - 167),
+                Size = new Size(30, 20),
+                Parent = dialog
+            };
+            
             // 按钮
             var btnDelete = new Button
             {
@@ -4929,11 +4999,26 @@ namespace WindowInspector
                     return;
                 }
                 
+                // 验证超时时间
+                if (!int.TryParse(txtTimeout.Text, out int timeoutMs))
+                {
+                    MessageBox.Show("请输入有效的超时时间数字", "输入错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
+                if (timeoutMs < 0)
+                {
+                    MessageBox.Show("超时时间不能为负数", "输入错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
                 // 保存所有设置
                 mole.SimilarityThreshold = threshold;
                 mole.ClickUntilDisappear = chkClickUntilDisappear.Checked;
                 mole.WaitUntilAppear = chkWaitUntilAppear.Checked;
                 mole.JumpToPreviousOnFail = chkJumpToPreviousOnFail.Checked;
+                mole.ReturnToPreviousOnTimeout = chkReturnToPreviousOnTimeout.Checked;
+                mole.TimeoutMs = timeoutMs;
                 mole.WaitAfterClick = chkWaitAfterClick.Checked;
                 mole.WaitAfterClickMs = waitTime;
                 SaveMoles();
@@ -5033,26 +5118,72 @@ namespace WindowInspector
                     // 裁剪新图像
                     var croppedImage = CropImage(screenshot, selection.Value);
                     
-                    // 删除旧截图文件
-                    if (File.Exists(mole.ImagePath))
+                    // 检查并处理 ImagePath
+                    bool needsNewPath = false;
+                    string oldPath = mole.ImagePath;
+                    
+                    // 检查路径是否为空或无效
+                    if (string.IsNullOrWhiteSpace(mole.ImagePath))
                     {
-                        try
+                        needsNewPath = true;
+                        AppendLog("⚠️ 图片路径为空，将生成新路径", LogType.Warning);
+                    }
+                    else if (!Path.IsPathRooted(mole.ImagePath))
+                    {
+                        // 相对路径，需要生成新路径
+                        needsNewPath = true;
+                        AppendLog($"⚠️ 检测到相对路径: {mole.ImagePath}，将生成新路径", LogType.Warning);
+                    }
+                    else
+                    {
+                        // 检查父目录是否存在
+                        var parentDir = Path.GetDirectoryName(mole.ImagePath);
+                        if (string.IsNullOrEmpty(parentDir) || !Directory.Exists(parentDir))
                         {
-                            File.Delete(mole.ImagePath);
-                        }
-                        catch (Exception ex)
-                        {
-                            AppendLog($"⚠️ 删除旧截图失败: {ex.Message}", LogType.Warning);
+                            needsNewPath = true;
+                            AppendLog($"⚠️ 父目录不存在: {parentDir}，将生成新路径", LogType.Warning);
                         }
                     }
                     
-                    // 保存新截图（使用相同的文件名）
-                    croppedImage.Save(mole.ImagePath, System.Drawing.Imaging.ImageFormat.Png);
-                    croppedImage.Dispose();
+                    // 如果需要新路径，生成标准路径
+                    if (needsNewPath)
+                    {
+                        var fileName = $"mole_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+                        mole.ImagePath = Path.Combine(_molesDirectory, fileName);
+                        AppendLog($"✅ 已生成新路径: {mole.ImagePath}", LogType.Info);
+                    }
+                    else
+                    {
+                        // 删除旧截图文件
+                        if (File.Exists(mole.ImagePath))
+                        {
+                            try
+                            {
+                                File.Delete(mole.ImagePath);
+                            }
+                            catch (Exception ex)
+                            {
+                                AppendLog($"⚠️ 删除旧截图失败: {ex.Message}", LogType.Warning);
+                            }
+                        }
+                    }
                     
-                    SaveMoles();
-                    RefreshCurrentMoleList();
-                    AppendLog($"✅ 已更新地鼠 \"{mole.Name}\" 的截图", LogType.Success);
+                    // 保存新截图
+                    try
+                    {
+                        croppedImage.Save(mole.ImagePath, System.Drawing.Imaging.ImageFormat.Png);
+                        croppedImage.Dispose();
+                        
+                        SaveMoles();
+                        RefreshCurrentMoleList();
+                        AppendLog($"✅ 已更新地鼠 \"{mole.Name}\" 的截图", LogType.Success);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"❌ 保存截图失败: {ex.Message}", LogType.Error);
+                        MessageBox.Show($"保存截图失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        croppedImage.Dispose();
+                    }
                 }
                 
                 screenshot.Dispose();
@@ -5355,6 +5486,431 @@ namespace WindowInspector
                 // 忽略错误
             }
         }
+
+        // ==================== 加载设置相关方法 ====================
+        
+        private void ChkAutoLoadGroups_CheckedChanged(object? sender, EventArgs e)
+        {
+            _config.AutoLoadMoleGroups = chkAutoLoadGroups.Checked;
+            SaveCurrentConfig();
+            AppendLog($"✅ 自动显示已{(chkAutoLoadGroups.Checked ? "启用" : "禁用")}", LogType.Info);
+        }
+
+        private void BtnLoadSelectedGroups_Click(object? sender, EventArgs e)
+        {
+            LoadSelectedMoleGroups();
+            // 切换到打地鼠标签页
+            tabMain.SelectedTab = tabPageMole;
+        }
+
+        private void ChkSelectAllGroups_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (lstMoleGroupsSelection.Items.Count == 0)
+                return;
+
+            // 避免递归触发
+            lstMoleGroupsSelection.ItemCheck -= LstMoleGroupsSelection_ItemCheck;
+            
+            for (int i = 0; i < lstMoleGroupsSelection.Items.Count; i++)
+            {
+                lstMoleGroupsSelection.SetItemChecked(i, chkSelectAllGroups.Checked);
+            }
+            
+            lstMoleGroupsSelection.ItemCheck += LstMoleGroupsSelection_ItemCheck;
+            
+            // 保存选择
+            SaveMoleGroupSelection();
+        }
+
+        private void LstMoleGroupsSelection_ItemCheck(object? sender, ItemCheckEventArgs e)
+        {
+            // 延迟保存，因为此时 CheckedItems 还未更新
+            BeginInvoke(new Action(() =>
+            {
+                SaveMoleGroupSelection();
+            }));
+        }
+
+        private void SaveMoleGroupSelection()
+        {
+            _config.SelectedMoleGroups.Clear();
+            foreach (int index in lstMoleGroupsSelection.CheckedIndices)
+            {
+                if (index < _moleGroups.Count)
+                {
+                    _config.SelectedMoleGroups.Add(_moleGroups[index].Name);
+                }
+            }
+            SaveCurrentConfig();
+        }
+
+        private void LoadMoleGroupsSelection()
+        {
+            if (lstMoleGroupsSelection == null)
+                return;
+            
+            // 临时移除事件处理器，避免在初始化时触发 BeginInvoke
+            lstMoleGroupsSelection.ItemCheck -= LstMoleGroupsSelection_ItemCheck;
+            
+            lstMoleGroupsSelection.Items.Clear();
+            
+            foreach (var group in _moleGroups)
+            {
+                lstMoleGroupsSelection.Items.Add(group.Name);
+            }
+
+            // 恢复选择状态
+            if (_config.SelectedMoleGroups.Count > 0)
+            {
+                for (int i = 0; i < _moleGroups.Count; i++)
+                {
+                    if (_config.SelectedMoleGroups.Contains(_moleGroups[i].Name))
+                    {
+                        lstMoleGroupsSelection.SetItemChecked(i, true);
+                    }
+                }
+            }
+
+            // 更新自动加载复选框状态
+            if (chkAutoLoadGroups != null)
+            {
+                chkAutoLoadGroups.Checked = _config.AutoLoadMoleGroups;
+            }
+            
+            // 重新添加事件处理器
+            lstMoleGroupsSelection.ItemCheck += LstMoleGroupsSelection_ItemCheck;
+        }
+
+        private void LoadSelectedMoleGroups()
+        {
+            // 清空现有标签页
+            tabMoleGroups.TabPages.Clear();
+
+            // 获取选中的分组索引
+            var selectedIndices = lstMoleGroupsSelection.CheckedIndices.Cast<int>().ToList();
+            
+            if (selectedIndices.Count == 0)
+            {
+                AppendLog("⚠️ 请至少选择一个分组", LogType.Warning);
+                return;
+            }
+
+            // 只为选中的分组创建标签页
+            foreach (int index in selectedIndices)
+            {
+                if (index < _moleGroups.Count)
+                {
+                    CreateMoleGroupTab(_moleGroups[index], index);
+                }
+            }
+
+            // 选中第一个标签页
+            if (tabMoleGroups.TabPages.Count > 0)
+            {
+                tabMoleGroups.SelectedIndex = 0;
+                _currentMoleGroupIndex = selectedIndices[0];
+            }
+
+            AppendLog($"✅ 已显示 {selectedIndices.Count} 个分组", LogType.Success);
+        }
+
+        private void BtnExportGroups_Click(object? sender, EventArgs e)
+        {
+            // 获取选中的分组索引
+            var selectedIndices = lstMoleGroupsSelection.CheckedIndices.Cast<int>().ToList();
+            
+            if (selectedIndices.Count == 0)
+            {
+                MessageBox.Show("请至少选择一个分组进行导出", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                // 获取程序所在目录
+                var programDir = AppDomain.CurrentDomain.BaseDirectory;
+                var exportDir = Path.Combine(programDir, "导出");
+                
+                // 确保导出目录存在
+                if (!Directory.Exists(exportDir))
+                {
+                    Directory.CreateDirectory(exportDir);
+                }
+
+                // 为每个选中的分组创建导出文件
+                foreach (int index in selectedIndices)
+                {
+                    if (index < _moleGroups.Count)
+                    {
+                        var group = _moleGroups[index];
+                        ExportMoleGroup(group, exportDir);
+                    }
+                }
+
+                AppendLog($"✅ 已导出 {selectedIndices.Count} 个分组到: {exportDir}", LogType.Success);
+                
+                // 弹窗提示导出成功
+                MessageBox.Show($"导出成功！\n\n已导出 {selectedIndices.Count} 个分组到:\n{exportDir}", "导出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppendLog($"❌ 导出失败: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private void ExportMoleGroup(MoleGroup group, string exportDir)
+        {
+            // 创建分组专属文件夹
+            var groupDir = Path.Combine(exportDir, group.Name);
+            if (!Directory.Exists(groupDir))
+            {
+                Directory.CreateDirectory(groupDir);
+            }
+
+            // 创建图片文件夹
+            var imagesDir = Path.Combine(groupDir, "images");
+            if (!Directory.Exists(imagesDir))
+            {
+                Directory.CreateDirectory(imagesDir);
+            }
+
+            // 复制图片文件并更新路径
+            var exportGroup = new MoleGroup
+            {
+                Name = group.Name,
+                Moles = new List<MoleItem>()
+            };
+
+            foreach (var mole in group.Moles)
+            {
+                var exportMole = new MoleItem
+                {
+                    Name = mole.Name,
+                    ImagePath = mole.ImagePath,
+                    IsEnabled = mole.IsEnabled,
+                    CreatedTime = mole.CreatedTime,
+                    IsIdleClick = mole.IsIdleClick,
+                    IdleClickPosition = mole.IdleClickPosition,
+                    SimilarityThreshold = mole.SimilarityThreshold,
+                    IsJump = mole.IsJump,
+                    JumpTargetGroup = mole.JumpTargetGroup,
+                    JumpTargetStep = mole.JumpTargetStep,
+                    ClickUntilDisappear = mole.ClickUntilDisappear,
+                    WaitUntilAppear = mole.WaitUntilAppear,
+                    JumpToPreviousOnFail = mole.JumpToPreviousOnFail,
+                    StopHunting = mole.StopHunting,
+                    WaitAfterClick = mole.WaitAfterClick,
+                    WaitAfterClickMs = mole.WaitAfterClickMs,
+                    SendKeyPress = mole.SendKeyPress,
+                    KeyPressDefinition = mole.KeyPressDefinition,
+                    KeyPressWaitMs = mole.KeyPressWaitMs,
+                    EnableMouseScroll = mole.EnableMouseScroll,
+                    ScrollUp = mole.ScrollUp,
+                    ScrollCount = mole.ScrollCount,
+                    ScrollWaitMs = mole.ScrollWaitMs,
+                    IsConfigStep = mole.IsConfigStep,
+                    SwitchConfig = mole.SwitchConfig,
+                    TargetConfigName = mole.TargetConfigName,
+                    ConfigSwitchWaitMs = mole.ConfigSwitchWaitMs,
+                    SwitchTextContent = mole.SwitchTextContent,
+                    TargetTextName = mole.TargetTextName,
+                    TextSwitchWaitMs = mole.TextSwitchWaitMs
+                };
+
+                // 如果有图片文件，复制到导出目录
+                if (!string.IsNullOrEmpty(mole.ImagePath) && File.Exists(mole.ImagePath) && !mole.IsIdleClick && !mole.IsJump && !mole.IsConfigStep)
+                {
+                    var fileName = Path.GetFileName(mole.ImagePath);
+                    var destPath = Path.Combine(imagesDir, fileName);
+                    File.Copy(mole.ImagePath, destPath, true);
+                    
+                    // 更新为相对路径
+                    exportMole.ImagePath = Path.Combine("images", fileName);
+                }
+                else
+                {
+                    exportMole.ImagePath = "";
+                }
+
+                exportGroup.Moles.Add(exportMole);
+            }
+
+            // 保存分组配置
+            var configPath = Path.Combine(groupDir, "group_config.json");
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(exportGroup, Newtonsoft.Json.Formatting.Indented);
+            File.WriteAllText(configPath, json);
+        }
+
+        private void BtnImportGroups_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                // 获取程序所在目录
+                var programDir = AppDomain.CurrentDomain.BaseDirectory;
+                var exportDir = Path.Combine(programDir, "导出");
+                
+                // 确保导出目录存在
+                if (!Directory.Exists(exportDir))
+                {
+                    Directory.CreateDirectory(exportDir);
+                }
+
+                // 使用 FolderBrowserDialog 让用户选择文件夹
+                using (var fbd = new FolderBrowserDialog())
+                {
+                    fbd.Description = "选择要导入的分组文件夹（可以选择多个分组的父文件夹）";
+                    fbd.SelectedPath = exportDir;
+                    fbd.ShowNewFolderButton = false;
+
+                    if (fbd.ShowDialog() != DialogResult.OK)
+                        return;
+
+                    var selectedPath = fbd.SelectedPath;
+                    var importedGroups = new List<string>();
+                    var renamedGroups = new List<(string oldName, string newName)>();
+
+                    // 查找所有包含 group_config.json 的子文件夹
+                    var configFiles = Directory.GetFiles(selectedPath, "group_config.json", SearchOption.AllDirectories);
+
+                    if (configFiles.Length == 0)
+                    {
+                        MessageBox.Show("所选文件夹中没有找到分组配置文件", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    // 导入所有找到的分组
+                    foreach (var configPath in configFiles)
+                    {
+                        var result = ImportMoleGroup(configPath);
+                        if (result.success)
+                        {
+                            importedGroups.Add(result.groupName);
+                            if (result.renamed)
+                            {
+                                renamedGroups.Add((result.originalName, result.groupName));
+                            }
+                        }
+                    }
+
+                    if (importedGroups.Count > 0)
+                    {
+                        // 保存配置
+                        SaveMoles();
+                        
+                        // 刷新显示设置界面
+                        LoadMoleGroupsSelection();
+                        
+                        // 自动选中新导入的分组
+                        for (int i = 0; i < _moleGroups.Count; i++)
+                        {
+                            if (importedGroups.Contains(_moleGroups[i].Name))
+                            {
+                                lstMoleGroupsSelection.SetItemChecked(i, true);
+                            }
+                        }
+                        
+                        // 自动加载并切换到打地鼠界面
+                        LoadSelectedMoleGroups();
+                        tabMain.SelectedTab = tabPageMole;
+                        
+                        AppendLog($"✅ 已导入 {importedGroups.Count} 个分组", LogType.Success);
+                        
+                        // 只有在有重命名的分组时才提示用户
+                        if (renamedGroups.Count > 0)
+                        {
+                            var message = "以下分组因名称冲突已自动重命名：\n\n";
+                            foreach (var (oldName, newName) in renamedGroups)
+                            {
+                                message += $"{oldName} → {newName}\n";
+                            }
+                            MessageBox.Show(message, "导入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导入失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppendLog($"❌ 导入失败: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private (bool success, string groupName, string originalName, bool renamed) ImportMoleGroup(string configPath)
+        {
+            try
+            {
+                // 读取配置文件
+                var json = File.ReadAllText(configPath);
+                var importGroup = Newtonsoft.Json.JsonConvert.DeserializeObject<MoleGroup>(json);
+                
+                if (importGroup == null)
+                {
+                    return (false, "", "", false);
+                }
+
+                var originalName = importGroup.Name;
+                var groupDir = Path.GetDirectoryName(configPath);
+                var imagesDir = Path.Combine(groupDir!, "images");
+
+                // 检查名称冲突并自动重命名
+                var finalName = importGroup.Name;
+                var renamed = false;
+                var counter = 2;
+                
+                while (_moleGroups.Any(g => g.Name == finalName))
+                {
+                    finalName = $"{importGroup.Name}_{counter}";
+                    counter++;
+                    renamed = true;
+                }
+
+                importGroup.Name = finalName;
+
+                // 处理图片文件
+                foreach (var mole in importGroup.Moles)
+                {
+                    if (!string.IsNullOrEmpty(mole.ImagePath) && !mole.IsIdleClick && !mole.IsJump && !mole.IsConfigStep)
+                    {
+                        var sourceImagePath = Path.Combine(groupDir!, mole.ImagePath);
+                        
+                        if (File.Exists(sourceImagePath))
+                        {
+                            // 生成唯一的文件名
+                            var fileName = Path.GetFileName(sourceImagePath);
+                            var destPath = Path.Combine(_molesDirectory, $"{finalName}_{fileName}");
+                            
+                            // 如果文件已存在，添加时间戳
+                            if (File.Exists(destPath))
+                            {
+                                var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                                var ext = Path.GetExtension(fileName);
+                                destPath = Path.Combine(_molesDirectory, $"{finalName}_{nameWithoutExt}_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+                            }
+                            
+                            File.Copy(sourceImagePath, destPath, true);
+                            mole.ImagePath = destPath;
+                        }
+                        else
+                        {
+                            mole.ImagePath = "";
+                        }
+                    }
+                }
+
+                // 添加到分组列表
+                _moleGroups.Add(importGroup);
+
+                return (true, finalName, originalName, renamed);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"⚠️ 导入分组失败: {ex.Message}", LogType.Warning);
+                return (false, "", "", false);
+            }
+        }
+
+        // ==================== 加载设置相关方法结束 ====================
 
         /// <summary>
         /// 处理待删除的文件（启动时调用）

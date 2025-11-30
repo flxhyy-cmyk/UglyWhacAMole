@@ -16,6 +16,10 @@ namespace WindowInspector.Models
         public List<string> ExcelCells { get; set; } = new();
         public List<CellGroup> ExcelCellGroups { get; set; } = new();
         public int ActiveCellGroupIndex { get; set; }
+        
+        // 地鼠分组加载设置
+        public bool AutoLoadMoleGroups { get; set; } = false;
+        public List<string> SelectedMoleGroups { get; set; } = new();
     }
 
     public class InputPosition
