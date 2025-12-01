@@ -23,6 +23,7 @@ namespace WindowInspector
         private readonly ExcelService _excelService;
         private readonly MoleHunter _moleHunter;
         private readonly ThemeManager _themeManager;
+        private HotkeySettings _hotkeySettings;
         
         private WindowConfig _config;
         private IntPtr _targetWindow;
@@ -44,6 +45,12 @@ namespace WindowInspector
         private const int HOTKEY_ID_F3 = 2;
         private const int HOTKEY_ID_F4 = 3;
         private const int HOTKEY_ID_F6 = 4;
+        private const int HOTKEY_ID_CONFIG_TEXT = 5;
+        private const int HOTKEY_ID_BATCH_SELECT = 6;
+        private const int HOTKEY_ID_ADD_JUMP = 7;
+        
+        // 虚拟键码映射
+        private Dictionary<Keys, uint> _keyToVKMap;
 
         public MainForm()
         {
@@ -58,6 +65,10 @@ namespace WindowInspector
                 _moleHunter = new MoleHunter();
                 _themeManager = new ThemeManager(_configManager);
                 _config = new WindowConfig();
+                _hotkeySettings = new HotkeySettings();
+                
+                // 初始化键码映射
+                InitializeKeyMapping();
                 
                 // 初始化地鼠目录（保存到AppData）
                 _molesDirectory = Path.Combine(_configManager.ProgramDirectory, "moles");
@@ -67,13 +78,17 @@ namespace WindowInspector
                 SetupEventHandlers();
                 LoadConfiguration();
                 LoadLastExcelPath();
+                LoadHotkeySettings();
                 LoadMoles();
                 ProcessPendingDeletions(); // 处理上次未能删除的文件
                 RegisterGlobalHotKeys();
+                UpdateHotkeyDisplay();
                 
                 // 应用主题
                 _themeManager.ApplyTheme(this);
                 ApplyTitleBarTheme();
+                
+
             }
             catch (Exception ex)
             {
@@ -81,7 +96,7 @@ namespace WindowInspector
                 throw;
             }
         }
-
+        
         private void ApplyTitleBarTheme()
         {
             var effectiveTheme = _themeManager.GetEffectiveTheme();
@@ -241,32 +256,69 @@ namespace WindowInspector
 
         private void RegisterGlobalHotKeys()
         {
-            // 注册F2为全局热键（无修饰符）
-            bool success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F2, WindowHelper.MOD_NONE, WindowHelper.VK_F2);
+            // 注册F2功能快捷键
+            var (mod2, vk2) = GetModifierAndVK(_hotkeySettings.F2Key);
+            bool success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F2, mod2, vk2);
             if (!success)
             {
-                AppendLog("⚠️ 注册F2全局热键失败，可能已被其他程序占用", LogType.Warning);
+                AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.F2Key)}，可能已被其他程序占用", LogType.Warning);
             }
             
-            // 注册F3为全局热键（无修饰符）
-            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F3, WindowHelper.MOD_NONE, WindowHelper.VK_F3);
+            // 注册F3功能快捷键
+            var (mod3, vk3) = GetModifierAndVK(_hotkeySettings.F3Key);
+            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F3, mod3, vk3);
             if (!success)
             {
-                AppendLog("⚠️ 注册F3全局热键失败，可能已被其他程序占用", LogType.Warning);
+                AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.F3Key)}，可能已被其他程序占用", LogType.Warning);
             }
             
-            // 注册F4为全局热键（无修饰符）
-            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F4, WindowHelper.MOD_NONE, WindowHelper.VK_F4);
+            // 注册F4功能快捷键
+            var (mod4, vk4) = GetModifierAndVK(_hotkeySettings.F4Key);
+            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F4, mod4, vk4);
             if (!success)
             {
-                AppendLog("⚠️ 注册F4全局热键失败，可能已被其他程序占用", LogType.Warning);
+                AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.F4Key)}，可能已被其他程序占用", LogType.Warning);
             }
             
-            // 注册F6为全局热键（无修饰符）
-            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F6, WindowHelper.MOD_NONE, WindowHelper.VK_F6);
+            // 注册F6功能快捷键
+            var (mod6, vk6) = GetModifierAndVK(_hotkeySettings.F6Key);
+            success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_F6, mod6, vk6);
             if (!success)
             {
-                AppendLog("⚠️ 注册F6全局热键失败，可能已被其他程序占用", LogType.Warning);
+                AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.F6Key)}，可能已被其他程序占用", LogType.Warning);
+            }
+            
+            // 注册配置文本定义快捷键（如果已设置）
+            if (_hotkeySettings.ConfigTextKey.HasValue && _hotkeySettings.ConfigTextKey.Value != Keys.None)
+            {
+                var (modCfg, vkCfg) = GetModifierAndVK(_hotkeySettings.ConfigTextKey.Value);
+                success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_CONFIG_TEXT, modCfg, vkCfg);
+                if (!success)
+                {
+                    AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.ConfigTextKey.Value)}，可能已被其他程序占用", LogType.Warning);
+                }
+            }
+            
+            // 注册批量启用/禁用快捷键（如果已设置）
+            if (_hotkeySettings.BatchSelectKey.HasValue && _hotkeySettings.BatchSelectKey.Value != Keys.None)
+            {
+                var (modBatch, vkBatch) = GetModifierAndVK(_hotkeySettings.BatchSelectKey.Value);
+                success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_BATCH_SELECT, modBatch, vkBatch);
+                if (!success)
+                {
+                    AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.BatchSelectKey.Value)}，可能已被其他程序占用", LogType.Warning);
+                }
+            }
+            
+            // 注册添加跳转/键鼠快捷键（如果已设置）
+            if (_hotkeySettings.AddJumpKey.HasValue && _hotkeySettings.AddJumpKey.Value != Keys.None)
+            {
+                var (modJump, vkJump) = GetModifierAndVK(_hotkeySettings.AddJumpKey.Value);
+                success = WindowHelper.RegisterHotKey(this.Handle, HOTKEY_ID_ADD_JUMP, modJump, vkJump);
+                if (!success)
+                {
+                    AppendLog($"⚠️ 注册快捷键失败: {GetKeyDisplayName(_hotkeySettings.AddJumpKey.Value)}，可能已被其他程序占用", LogType.Warning);
+                }
             }
         }
 
@@ -276,6 +328,9 @@ namespace WindowInspector
             WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_F3);
             WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_F4);
             WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_F6);
+            WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_CONFIG_TEXT);
+            WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_BATCH_SELECT);
+            WindowHelper.UnregisterHotKey(this.Handle, HOTKEY_ID_ADD_JUMP);
         }
 
         protected override void WndProc(ref Message m)
@@ -316,6 +371,21 @@ namespace WindowInspector
                 {
                     // F6热键被触发，添加空击位置
                     BtnSetIdleClick_Click(null, EventArgs.Empty);
+                }
+                else if (hotkeyId == HOTKEY_ID_CONFIG_TEXT)
+                {
+                    // 配置文本定义快捷键被触发
+                    BtnAddConfigStep_Click(null, EventArgs.Empty);
+                }
+                else if (hotkeyId == HOTKEY_ID_BATCH_SELECT)
+                {
+                    // 批量启用/禁用快捷键被触发
+                    BtnBatchSelect_Click(null, EventArgs.Empty);
+                }
+                else if (hotkeyId == HOTKEY_ID_ADD_JUMP)
+                {
+                    // 添加跳转/键鼠快捷键被触发
+                    BtnAddJump_Click(null, EventArgs.Empty);
                 }
             }
             
@@ -735,6 +805,7 @@ namespace WindowInspector
                     _themeManager.ChangeTheme(dialog.SelectedTheme);
                     _themeManager.ApplyTheme(this);
                     ApplyTitleBarTheme();
+                    UpdateHotkeyDisplay(); // 更新快捷键输入框颜色
                     AppendLog($"✅ 主题已切换为: {GetThemeModeName(dialog.SelectedTheme)}", LogType.Success);
                 }
             }
@@ -775,6 +846,326 @@ namespace WindowInspector
             {
                 MessageBox.Show($"打开文件夹失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void InitializeKeyMapping()
+        {
+            _keyToVKMap = new Dictionary<Keys, uint>
+            {
+                { Keys.F1, 0x70 }, { Keys.F2, 0x71 }, { Keys.F3, 0x72 }, { Keys.F4, 0x73 },
+                { Keys.F5, 0x74 }, { Keys.F6, 0x75 }, { Keys.F7, 0x76 }, { Keys.F8, 0x77 },
+                { Keys.F9, 0x78 }, { Keys.F10, 0x79 }, { Keys.F11, 0x7A }, { Keys.F12, 0x7B },
+                { Keys.A, 0x41 }, { Keys.B, 0x42 }, { Keys.C, 0x43 }, { Keys.D, 0x44 },
+                { Keys.E, 0x45 }, { Keys.F, 0x46 }, { Keys.G, 0x47 }, { Keys.H, 0x48 },
+                { Keys.I, 0x49 }, { Keys.J, 0x4A }, { Keys.K, 0x4B }, { Keys.L, 0x4C },
+                { Keys.M, 0x4D }, { Keys.N, 0x4E }, { Keys.O, 0x4F }, { Keys.P, 0x50 },
+                { Keys.Q, 0x51 }, { Keys.R, 0x52 }, { Keys.S, 0x53 }, { Keys.T, 0x54 },
+                { Keys.U, 0x55 }, { Keys.V, 0x56 }, { Keys.W, 0x57 }, { Keys.X, 0x58 },
+                { Keys.Y, 0x59 }, { Keys.Z, 0x5A },
+                { Keys.D0, 0x30 }, { Keys.D1, 0x31 }, { Keys.D2, 0x32 }, { Keys.D3, 0x33 },
+                { Keys.D4, 0x34 }, { Keys.D5, 0x35 }, { Keys.D6, 0x36 }, { Keys.D7, 0x37 },
+                { Keys.D8, 0x38 }, { Keys.D9, 0x39 }
+            };
+        }
+
+        private void LoadHotkeySettings()
+        {
+            var settings = _configManager.LoadHotkeySettings();
+            if (settings != null)
+            {
+                _hotkeySettings = settings;
+                AppendLog("✅ 已加载快捷键设置", LogType.Success);
+            }
+            else
+            {
+                _hotkeySettings = new HotkeySettings();
+                AppendLog("ℹ️ 使用默认快捷键设置", LogType.Info);
+            }
+        }
+
+        private void TxtHotkey_Enter(object? sender, EventArgs e)
+        {
+            if (sender is TextBox textBox)
+            {
+                var effectiveTheme = _themeManager.GetEffectiveTheme();
+                if (effectiveTheme == ThemeMode.Dark)
+                {
+                    // 深色模式：淡紫色底色，红色文字
+                    textBox.BackColor = Color.FromArgb(200, 180, 230); // 淡紫色
+                    textBox.ForeColor = Color.Red;
+                }
+                else
+                {
+                    // 浅色模式：淡黄色底色，黑色文字
+                    textBox.BackColor = Color.LightYellow;
+                    textBox.ForeColor = Color.Black;
+                }
+            }
+        }
+
+        private void TxtHotkey_Leave(object? sender, EventArgs e)
+        {
+            if (sender is TextBox textBox)
+            {
+                var effectiveTheme = _themeManager.GetEffectiveTheme();
+                if (effectiveTheme == ThemeMode.Dark)
+                {
+                    // 深色模式：黑色底色，白色文字
+                    textBox.BackColor = Color.Black;
+                    textBox.ForeColor = Color.White;
+                }
+                else
+                {
+                    // 浅色模式：白色底色，黑色文字
+                    textBox.BackColor = SystemColors.Window;
+                    textBox.ForeColor = Color.Black;
+                }
+                
+                // 失去焦点时保存设置
+                SaveHotkeySettings();
+            }
+        }
+
+        private void TxtHotkeyF2_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkey(txtHotkeyF2, e, key => _hotkeySettings.F2Key = key);
+        }
+
+        private void TxtHotkeyF3_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkey(txtHotkeyF3, e, key => _hotkeySettings.F3Key = key);
+        }
+
+        private void TxtHotkeyF4_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkey(txtHotkeyF4, e, key => _hotkeySettings.F4Key = key);
+        }
+
+        private void TxtHotkeyF6_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkey(txtHotkeyF6, e, key => _hotkeySettings.F6Key = key);
+        }
+
+        private void TxtHotkeyConfigText_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkeyNullable(txtHotkeyConfigText, e, key => _hotkeySettings.ConfigTextKey = key);
+        }
+
+        private void TxtHotkeyBatchSelect_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkeyNullable(txtHotkeyBatchSelect, e, key => _hotkeySettings.BatchSelectKey = key);
+        }
+
+        private void TxtHotkeyAddJump_KeyDown(object? sender, KeyEventArgs e)
+        {
+            CaptureHotkeyNullable(txtHotkeyAddJump, e, key => _hotkeySettings.AddJumpKey = key);
+        }
+
+        private void CaptureHotkey(TextBox textBox, KeyEventArgs e, Action<Keys> updateAction)
+        {
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+
+            // 忽略修饰键本身
+            if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.ShiftKey || 
+                e.KeyCode == Keys.Alt || e.KeyCode == Keys.Menu)
+            {
+                return;
+            }
+
+            // 组合键
+            Keys key = e.KeyCode;
+            if (e.Control) key |= Keys.Control;
+            if (e.Shift) key |= Keys.Shift;
+            if (e.Alt) key |= Keys.Alt;
+
+            // 检查是否与其他快捷键冲突
+            if (IsKeyConflict(key, textBox))
+            {
+                MessageBox.Show("该快捷键已被其他功能使用，请选择其他快捷键", "快捷键冲突", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            updateAction(key);
+            textBox.Text = GetKeyDisplayName(key);
+        }
+
+        private void CaptureHotkeyNullable(TextBox textBox, KeyEventArgs e, Action<Keys?> updateAction)
+        {
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+
+            // 按 Delete 或 Backspace 清除快捷键
+            if (e.KeyCode == Keys.Delete || e.KeyCode == Keys.Back)
+            {
+                updateAction(null);
+                textBox.Text = "(未设置)";
+                return;
+            }
+
+            // 忽略修饰键本身
+            if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.ShiftKey || 
+                e.KeyCode == Keys.Alt || e.KeyCode == Keys.Menu)
+            {
+                return;
+            }
+
+            // 组合键
+            Keys key = e.KeyCode;
+            if (e.Control) key |= Keys.Control;
+            if (e.Shift) key |= Keys.Shift;
+            if (e.Alt) key |= Keys.Alt;
+
+            // 检查是否与其他快捷键冲突
+            if (IsKeyConflictNullable(key, textBox))
+            {
+                MessageBox.Show("该快捷键已被其他功能使用，请选择其他快捷键", "快捷键冲突", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            updateAction(key);
+            textBox.Text = GetKeyDisplayName(key);
+        }
+
+        private bool IsKeyConflict(Keys key, TextBox currentTextBox)
+        {
+            if (currentTextBox.Name != "txtHotkeyF2" && key == _hotkeySettings.F2Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF3" && key == _hotkeySettings.F3Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF4" && key == _hotkeySettings.F4Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF6" && key == _hotkeySettings.F6Key) return true;
+            if (currentTextBox.Name != "txtHotkeyConfigText" && _hotkeySettings.ConfigTextKey.HasValue && key == _hotkeySettings.ConfigTextKey.Value) return true;
+            if (currentTextBox.Name != "txtHotkeyBatchSelect" && _hotkeySettings.BatchSelectKey.HasValue && key == _hotkeySettings.BatchSelectKey.Value) return true;
+            if (currentTextBox.Name != "txtHotkeyAddJump" && _hotkeySettings.AddJumpKey.HasValue && key == _hotkeySettings.AddJumpKey.Value) return true;
+            return false;
+        }
+
+        private bool IsKeyConflictNullable(Keys key, TextBox currentTextBox)
+        {
+            if (currentTextBox.Name != "txtHotkeyF2" && key == _hotkeySettings.F2Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF3" && key == _hotkeySettings.F3Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF4" && key == _hotkeySettings.F4Key) return true;
+            if (currentTextBox.Name != "txtHotkeyF6" && key == _hotkeySettings.F6Key) return true;
+            if (currentTextBox.Name != "txtHotkeyConfigText" && _hotkeySettings.ConfigTextKey.HasValue && key == _hotkeySettings.ConfigTextKey.Value) return true;
+            if (currentTextBox.Name != "txtHotkeyBatchSelect" && _hotkeySettings.BatchSelectKey.HasValue && key == _hotkeySettings.BatchSelectKey.Value) return true;
+            if (currentTextBox.Name != "txtHotkeyAddJump" && _hotkeySettings.AddJumpKey.HasValue && key == _hotkeySettings.AddJumpKey.Value) return true;
+            return false;
+        }
+
+        private void SaveHotkeySettings()
+        {
+            try
+            {
+                _configManager.SaveHotkeySettings(_hotkeySettings);
+                AppendLog("✅ 快捷键设置已保存", LogType.Success);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"❌ 保存快捷键设置失败: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private void BtnResetHotkeys_Click(object? sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+                "确定要恢复默认快捷键设置吗？",
+                "确认恢复",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (result == DialogResult.Yes)
+            {
+                _hotkeySettings.F2Key = Keys.F2;
+                _hotkeySettings.F3Key = Keys.F3;
+                _hotkeySettings.F4Key = Keys.F4;
+                _hotkeySettings.F6Key = Keys.F6;
+                _hotkeySettings.ConfigTextKey = null;
+                _hotkeySettings.BatchSelectKey = null;
+                _hotkeySettings.AddJumpKey = null;
+                UpdateHotkeyDisplay();
+                SaveHotkeySettings();
+                AppendLog("✅ 已恢复默认快捷键", LogType.Success);
+                AppendLog("⚠️ 请重启程序以使新快捷键生效", LogType.Warning);
+            }
+        }
+
+        private void UpdateHotkeyDisplay()
+        {
+            var effectiveTheme = _themeManager.GetEffectiveTheme();
+            var isDark = effectiveTheme == ThemeMode.Dark;
+            
+            // 更新快捷键设置标签页中的输入框显示
+            if (txtHotkeyF2 != null)
+            {
+                txtHotkeyF2.Text = GetKeyDisplayName(_hotkeySettings.F2Key);
+                txtHotkeyF2.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyF2.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyF3 != null)
+            {
+                txtHotkeyF3.Text = GetKeyDisplayName(_hotkeySettings.F3Key);
+                txtHotkeyF3.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyF3.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyF4 != null)
+            {
+                txtHotkeyF4.Text = GetKeyDisplayName(_hotkeySettings.F4Key);
+                txtHotkeyF4.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyF4.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyF6 != null)
+            {
+                txtHotkeyF6.Text = GetKeyDisplayName(_hotkeySettings.F6Key);
+                txtHotkeyF6.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyF6.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyConfigText != null)
+            {
+                txtHotkeyConfigText.Text = _hotkeySettings.ConfigTextKey.HasValue ? GetKeyDisplayName(_hotkeySettings.ConfigTextKey.Value) : "(未设置)";
+                txtHotkeyConfigText.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyConfigText.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyBatchSelect != null)
+            {
+                txtHotkeyBatchSelect.Text = _hotkeySettings.BatchSelectKey.HasValue ? GetKeyDisplayName(_hotkeySettings.BatchSelectKey.Value) : "(未设置)";
+                txtHotkeyBatchSelect.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyBatchSelect.ForeColor = isDark ? Color.White : Color.Black;
+            }
+            if (txtHotkeyAddJump != null)
+            {
+                txtHotkeyAddJump.Text = _hotkeySettings.AddJumpKey.HasValue ? GetKeyDisplayName(_hotkeySettings.AddJumpKey.Value) : "(未设置)";
+                txtHotkeyAddJump.BackColor = isDark ? Color.Black : SystemColors.Window;
+                txtHotkeyAddJump.ForeColor = isDark ? Color.White : Color.Black;
+            }
+        }
+
+        private string GetKeyDisplayName(Keys key)
+        {
+            var keyCode = key & Keys.KeyCode;
+            var modifiers = key & Keys.Modifiers;
+
+            string result = "";
+            if ((modifiers & Keys.Control) != 0) result += "Ctrl + ";
+            if ((modifiers & Keys.Shift) != 0) result += "Shift + ";
+            if ((modifiers & Keys.Alt) != 0) result += "Alt + ";
+
+            result += keyCode.ToString();
+            return result;
+        }
+
+        private (uint modifier, uint vk) GetModifierAndVK(Keys key)
+        {
+            uint modifier = WindowHelper.MOD_NONE;
+            var keyCode = key & Keys.KeyCode;
+            var modifiers = key & Keys.Modifiers;
+
+            if ((modifiers & Keys.Control) != 0) modifier |= WindowHelper.MOD_CONTROL;
+            if ((modifiers & Keys.Shift) != 0) modifier |= WindowHelper.MOD_SHIFT;
+            if ((modifiers & Keys.Alt) != 0) modifier |= WindowHelper.MOD_ALT;
+
+            uint vk = _keyToVKMap.ContainsKey(keyCode) ? _keyToVKMap[keyCode] : 0;
+            return (modifier, vk);
         }
 
         private void StartCapsLockMonitor()
@@ -1887,17 +2278,31 @@ namespace WindowInspector
         {
             var tabPage = new TabPage(group.Name);
             tabPage.Tag = index;
+            tabPage.Padding = new Padding(0); // 移除 Padding 以最大化 ListBox 可用空间
+            
+            // 先将 tabPage 添加到 tabMoleGroups
+            tabMoleGroups.TabPages.Add(tabPage);
+            
+            // 步骤数量大于35时必须出现滚动条
+            int itemHeight = 20;
+            bool needScrollbar = group.Moles.Count > 35;
             
             var lstMoles = new CheckedListBox
             {
-                Location = new Point(0, 0),
-                Size = new Size(tabPage.ClientSize.Width, tabPage.ClientSize.Height),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                CheckOnClick = true,
+                // 使用 Dock.Fill 自动填满父容器
+                Dock = DockStyle.Fill,
+                CheckOnClick = false, // 禁用点击切换，只允许空格键切换
                 DrawMode = DrawMode.OwnerDrawFixed,
+                ItemHeight = itemHeight, // 明确设置项目高度，确保滚动计算正确
+                IntegralHeight = false, // 允许显示部分项目
+                BorderStyle = BorderStyle.None, // 移除边框，节省空间并避免布局问题
+                ScrollAlwaysVisible = needScrollbar, // 步骤数量大于35时显示滚动条
+                Tag = "CustomDraw", // 标记此列表，防止主题管理器接管绘制和修改 BorderStyle
                 // 注意：CheckedListBox 不支持 MultiExtended 模式，只能使用 One 模式
-                Parent = tabPage
             };
+            
+            // 添加到 tabPage（在 tabPage 已添加到 tabMoleGroups 之后）
+            tabPage.Controls.Add(lstMoles);
             
             // 加载该组的地鼠
             for (int i = 0; i < group.Moles.Count; i++)
@@ -1944,12 +2349,8 @@ namespace WindowInspector
                 lstMoles.BackColor = Color.White;
                 lstMoles.ForeColor = Color.Black;
             }
-            lstMoles.BorderStyle = BorderStyle.FixedSingle;
+            // BorderStyle 和 Tag 已在创建时设置
             
-            // 标记此列表，防止主题管理器接管绘制
-            lstMoles.Tag = "CustomDraw";
-            
-            tabMoleGroups.TabPages.Add(tabPage);
         }
         
         private CheckedListBox? GetCurrentMoleListBox()
@@ -2025,7 +2426,7 @@ namespace WindowInspector
                     }
                 }
                 
-                _moleHunter.Start(group.Moles, _moleGroups);
+                _moleHunter.Start(group.Moles, _moleGroups, group.Name);
                 AppendLog($"🎯 打地鼠已启动 - 分组: {group.Name}", LogType.Success);
                 
                 int idleClickCount = group.Moles.Count(m => m.IsIdleClick);
@@ -2406,6 +2807,12 @@ namespace WindowInspector
                 dialog.Close();
             };
             
+            // 设置对话框加载后的焦点
+            dialog.Shown += (s, ev) =>
+            {
+                btnEnableAll.Focus();
+            };
+            
             dialog.ShowDialog();
             // 对话框关闭后，位置已经保存在 _batchSelectSliderA 和 _batchSelectSliderB 中
         }
@@ -2437,7 +2844,7 @@ namespace WindowInspector
             var form = new Form
             {
                 Text = "选择跳转目标",
-                Size = new Size(350, 620),
+                Size = new Size(350, 680),
                 StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -2583,13 +2990,12 @@ namespace WindowInspector
                 Parent = form
             };
 
-            // 鼠标滚动复选框
+            // 鼠标滚动复选框（独立，不受键盘按键复选框控制）
             var chkMouseScroll = new CheckBox
             {
                 Text = "鼠标滚动操作",
                 Location = new Point(20, 365),
                 Size = new Size(310, 25),
-                Enabled = false,
                 Parent = form
             };
 
@@ -2658,22 +3064,16 @@ namespace WindowInspector
                 txtKeyPress.Enabled = enabled;
                 labelWaitTime.Enabled = enabled;
                 txtWaitTime.Enabled = enabled;
-                chkMouseScroll.Enabled = enabled;
                 
-                // 如果禁用按键输入，同时禁用鼠标滚动
-                if (!enabled)
-                {
-                    chkMouseScroll.Checked = false;
-                }
-                
-                // 禁用/启用跳转相关控件
-                label1.Enabled = !enabled;
-                comboGroup.Enabled = !enabled;
-                label2.Enabled = !enabled;
-                comboStep.Enabled = !enabled;
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
             };
 
-            // 鼠标滚动复选框状态改变事件
+            // 鼠标滚动复选框状态改变事件（独立，不受键盘按键复选框控制）
             chkMouseScroll.CheckedChanged += (s, e) =>
             {
                 bool enabled = chkMouseScroll.Checked;
@@ -2683,6 +3083,13 @@ namespace WindowInspector
                 txtScrollCount.Enabled = enabled;
                 labelScrollWait.Enabled = enabled;
                 txtScrollWait.Enabled = enabled;
+                
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
             };
 
             // 按键录制逻辑
@@ -2746,10 +3153,119 @@ namespace WindowInspector
                 }
             };
 
+            // 分隔线
+            var separator2 = new Label
+            {
+                Text = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                Location = new Point(20, 535),
+                Size = new Size(310, 20),
+                ForeColor = Color.Gray,
+                Parent = form
+            };
+
+            // 执行顺序单选框（默认键盘按键先执行）
+            var radKeyPressFirst = new RadioButton
+            {
+                Text = "键盘按键先执行",
+                Location = new Point(20, 560),
+                Size = new Size(150, 25),
+                Checked = true,
+                Enabled = false,
+                Parent = form
+            };
+
+            var radMouseScrollFirst = new RadioButton
+            {
+                Text = "鼠标滚动先执行",
+                Location = new Point(180, 560),
+                Size = new Size(150, 25),
+                Enabled = false,
+                Parent = form
+            };
+
+            // 单选框互锁逻辑
+            radKeyPressFirst.CheckedChanged += (s, e) =>
+            {
+                if (radKeyPressFirst.Checked)
+                {
+                    radMouseScrollFirst.Checked = false;
+                }
+            };
+
+            radMouseScrollFirst.CheckedChanged += (s, e) =>
+            {
+                if (radMouseScrollFirst.Checked)
+                {
+                    radKeyPressFirst.Checked = false;
+                }
+            };
+
+            // 更新单选框激活状态的方法
+            void UpdateRadioButtonsState()
+            {
+                // 只有当两个复选框都选中时，才激活单选框
+                bool bothChecked = chkSendKeyPress.Checked && chkMouseScroll.Checked;
+                radKeyPressFirst.Enabled = bothChecked;
+                radMouseScrollFirst.Enabled = bothChecked;
+            }
+
+            // 更新键盘按键复选框事件
+            EventHandler chkSendKeyPressHandler = null!;
+            chkSendKeyPressHandler = (s, e) =>
+            {
+                bool enabled = chkSendKeyPress.Checked;
+                labelKeyPress.Enabled = enabled;
+                txtKeyPress.Enabled = enabled;
+                labelWaitTime.Enabled = enabled;
+                txtWaitTime.Enabled = enabled;
+                
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
+                
+                // 更新单选框激活状态
+                UpdateRadioButtonsState();
+            };
+            chkSendKeyPress.CheckedChanged += chkSendKeyPressHandler;
+
+            // 更新鼠标滚动复选框事件
+            EventHandler chkMouseScrollHandler = null!;
+            chkMouseScrollHandler = (s, e) =>
+            {
+                bool enabled = chkMouseScroll.Checked;
+                labelScrollDirection.Enabled = enabled;
+                comboScrollDirection.Enabled = enabled;
+                labelScrollCount.Enabled = enabled;
+                txtScrollCount.Enabled = enabled;
+                labelScrollWait.Enabled = enabled;
+                txtScrollWait.Enabled = enabled;
+                
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
+                
+                // 更新单选框激活状态
+                UpdateRadioButtonsState();
+            };
+            chkMouseScroll.CheckedChanged += chkMouseScrollHandler;
+            
+            // 初始化跳转UI的启用状态（根据复选框当前状态）
+            bool initialShouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+            label1.Enabled = !initialShouldDisableJump;
+            comboGroup.Enabled = !initialShouldDisableJump;
+            label2.Enabled = !initialShouldDisableJump;
+            comboStep.Enabled = !initialShouldDisableJump;
+
             var btnOk = new Button
             {
                 Text = "确定",
-                Location = new Point(150, 545),
+                Location = new Point(150, 605),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.OK,
                 Parent = form
@@ -2758,7 +3274,7 @@ namespace WindowInspector
             var btnCancel = new Button
             {
                 Text = "取消",
-                Location = new Point(240, 545),
+                Location = new Point(240, 605),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.Cancel,
                 Parent = form
@@ -2839,6 +3355,8 @@ namespace WindowInspector
                         ScrollUp = comboScrollDirection.SelectedIndex == 0,
                         ScrollCount = scrollCount,
                         ScrollWaitMs = scrollWaitMs,
+                        IsKeyPressExecuteFirst = radKeyPressFirst.Checked,
+                        IsMouseScrollExecuteFirst = radMouseScrollFirst.Checked,
                         IsEnabled = true
                     };
                     
@@ -2857,7 +3375,8 @@ namespace WindowInspector
                     if (chkMouseScroll.Checked)
                     {
                         var direction = comboScrollDirection.SelectedIndex == 0 ? "向上" : "向下";
-                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms)";
+                        var executeOrder = radKeyPressFirst.Checked ? "键盘先执行" : "鼠标先执行";
+                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms) [{executeOrder}]";
                     }
                     AppendLog(logMsg, LogType.Success);
                 }
@@ -2899,6 +3418,155 @@ namespace WindowInspector
                     AppendLog($"✅ 已添加跳转步骤: 跳转到 {targetGroupName} ({stepInfo})", LogType.Success);
                 }
             }
+        }
+
+        private void BtnMoveStep_Click(object? sender, EventArgs e)
+        {
+            var currentGroup = GetCurrentMoleGroup();
+            var lstMoles = GetCurrentMoleListBox();
+            
+            if (lstMoles == null || lstMoles.SelectedIndex < 0)
+            {
+                MessageBox.Show("请先选中要移动的步骤", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            
+            if (currentGroup.Moles.Count <= 1)
+            {
+                MessageBox.Show("当前分组步骤数量不足，无需移动", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            
+            int selectedIndex = lstMoles.SelectedIndex;
+            var selectedMole = currentGroup.Moles[selectedIndex];
+            
+            // 动态计算按钮宽度和窗口宽度
+            int stepCount = currentGroup.Moles.Count;
+            int minButtonWidth = 35; // 最小按钮宽度，确保能显示文字
+            int buttonSpacing = 5; // 按钮之间的间距
+            int panelPadding = 20; // 面板左右内边距
+            
+            // 计算所需的面板宽度
+            int panelWidth = stepCount * minButtonWidth + (stepCount - 1) * buttonSpacing + panelPadding * 2;
+            
+            // 限制最小和最大宽度
+            panelWidth = Math.Max(400, Math.Min(panelWidth, 1200));
+            
+            // 窗口宽度 = 面板宽度 + 左右边距
+            int formWidth = panelWidth + 40;
+            
+            // 创建步骤移动对话框（非模态）
+            var form = new Form
+            {
+                Text = $"移动步骤: {selectedMole.Name}",
+                Size = new Size(formWidth, 175),
+                StartPosition = FormStartPosition.Manual,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                TopMost = true
+            };
+            
+            // 设置对话框位置：左边与主窗口右边对齐
+            form.Location = new Point(this.Right, this.Top + (this.Height - form.Height) / 2);
+            
+            var lblInfo = new Label
+            {
+                Text = $"点击目标位置，将步骤 {selectedIndex + 1} 移动到该位置之前",
+                Location = new Point(20, 20),
+                Size = new Size(formWidth - 40, 20),
+                Font = new Font(Font.FontFamily, 9, FontStyle.Bold),
+                Parent = form
+            };
+            
+            // 创建步骤刻度尺面板
+            var panelRuler = new Panel
+            {
+                Location = new Point(20, 50),
+                Size = new Size(panelWidth, 75),
+                BorderStyle = BorderStyle.FixedSingle,
+                AutoScroll = true, // 如果按钮太多，启用滚动
+                Parent = form
+            };
+            
+            // 添加鼠标滚轮事件，实现横向滚动
+            panelRuler.MouseWheel += (s, mwe) =>
+            {
+                if (panelRuler.HorizontalScroll.Visible)
+                {
+                    int currentScroll = panelRuler.HorizontalScroll.Value;
+                    int scrollAmount = mwe.Delta / 3; // 调整滚动速度
+                    int newScroll = Math.Max(panelRuler.HorizontalScroll.Minimum, 
+                                            Math.Min(panelRuler.HorizontalScroll.Maximum - panelRuler.HorizontalScroll.LargeChange + 1, 
+                                                    currentScroll - scrollAmount));
+                    panelRuler.HorizontalScroll.Value = newScroll;
+                    panelRuler.PerformLayout();
+                }
+            };
+            
+            // 重新计算实际按钮宽度（考虑面板实际宽度）
+            int availableWidth = panelWidth - panelPadding * 2;
+            int totalSpacing = (stepCount - 1) * buttonSpacing;
+            int buttonWidth = (availableWidth - totalSpacing) / stepCount;
+            buttonWidth = Math.Max(minButtonWidth, buttonWidth); // 确保不小于最小宽度
+            
+            // 动态生成步骤刻度按钮
+            for (int i = 0; i < stepCount; i++)
+            {
+                var mole = currentGroup.Moles[i];
+                var btn = new Button
+                {
+                    Text = (i + 1).ToString(),
+                    Location = new Point(panelPadding + i * (buttonWidth + buttonSpacing), 17),
+                    Size = new Size(buttonWidth, 40),
+                    Tag = i,
+                    Parent = panelRuler
+                };
+                
+                // 当前选中的步骤用不同颜色标识
+                if (i == selectedIndex)
+                {
+                    btn.BackColor = Color.LightCoral;
+                    btn.ForeColor = Color.White;
+                    btn.Font = new Font(btn.Font, FontStyle.Bold);
+                }
+                
+                // 点击刻度按钮时移动步骤
+                btn.Click += (s, ev) =>
+                {
+                    int targetIndex = (int)((Button)s).Tag;
+                    
+                    if (targetIndex == selectedIndex)
+                    {
+                        MessageBox.Show("目标位置与当前位置相同", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                    
+                    // 移动步骤：从原位置移除，插入到目标位置之前
+                    currentGroup.Moles.RemoveAt(selectedIndex);
+                    
+                    // 如果目标位置在原位置之后，需要调整索引
+                    int insertIndex = targetIndex > selectedIndex ? targetIndex - 1 : targetIndex;
+                    currentGroup.Moles.Insert(insertIndex, selectedMole);
+                    
+                    // 保存并刷新
+                    SaveMoles();
+                    RefreshCurrentMoleList();
+                    
+                    // 重新选中移动后的步骤
+                    if (lstMoles != null)
+                    {
+                        lstMoles.SelectedIndex = insertIndex;
+                    }
+                    
+                    AppendLog($"✅ 已移动步骤: {selectedMole.Name} (从位置 {selectedIndex + 1} 到 {insertIndex + 1})", LogType.Success);
+                    form.Close();
+                };
+            }
+            
+            // 使用非模态方式显示窗口
+            form.Show();
         }
 
         private void BtnCaptureMole_Click(object? sender, EventArgs e)
@@ -3057,6 +3725,7 @@ namespace WindowInspector
         private int _lastPreviewIndex = -1;
         private int _hoveredMoleIndex = -1;
         private CheckedListBox? _lastHoveredListBox = null;
+        private bool _allowCheckChange = true; // 标志是否允许改变复选框状态
         
         private void LstMoles_ItemCheck(object? sender, ItemCheckEventArgs e)
         {
@@ -3066,6 +3735,13 @@ namespace WindowInspector
                 if (group == null || e.Index < 0 || e.Index >= group.Moles.Count)
                     return;
                 
+                // 如果不允许改变复选框状态（鼠标点击触发），则取消操作
+                if (!_allowCheckChange)
+                {
+                    e.NewValue = e.CurrentValue; // 取消状态改变
+                    return;
+                }
+                
                 // 使用 BeginInvoke 延迟执行，因为 ItemCheck 事件在状态实际改变之前触发
                 this.BeginInvoke(new Action(() =>
                 {
@@ -3074,9 +3750,6 @@ namespace WindowInspector
                     
                     // 实时保存配置
                     SaveMoles();
-                    
-                    var statusText = group.Moles[e.Index].IsEnabled ? "已启用" : "已禁用";
-                    AppendLog($"✅ 步骤 {e.Index + 1} {statusText}: {group.Moles[e.Index].Name}", LogType.Info);
                 }));
             }
         }
@@ -3427,6 +4100,21 @@ namespace WindowInspector
                 int currentIndex = lstMoles.SelectedIndex;
                 int newIndex = -1;
                 
+                // 处理空格键切换复选框
+                if (e.KeyCode == Keys.Space)
+                {
+                    // 允许改变复选框状态
+                    _allowCheckChange = true;
+                    
+                    // 切换复选框状态
+                    bool newCheckedState = !lstMoles.GetItemChecked(currentIndex);
+                    lstMoles.SetItemChecked(currentIndex, newCheckedState);
+                    
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                
                 // 处理上下键
                 if (e.KeyCode == Keys.Up && currentIndex > 0)
                 {
@@ -3503,52 +4191,74 @@ namespace WindowInspector
                 
                 lstMoles.Items.Add(displayText, mole.IsEnabled);
             }
+            
+            // 步骤数量大于35时必须出现滚动条
+            lstMoles.ScrollAlwaysVisible = lstMoles.Items.Count > 35;
         }
         
         private void LstMoles_MouseDown(object? sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Right && sender is CheckedListBox lstMoles)
+            if (sender is CheckedListBox lstMoles)
             {
                 var group = GetCurrentMoleGroup();
                 if (group == null) return;
                 
                 var index = lstMoles.IndexFromPoint(e.Location);
                 
-                if (index >= 0 && index < group.Moles.Count)
+                if (e.Button == MouseButtons.Left)
                 {
-                    // 右键点击了某个步骤，关闭当前编辑窗口并打开新的
-                    CloseCurrentEditDialog();
-                    
-                    var mole = group.Moles[index];
-                    
-                    // 如果是配置步骤，显示编辑对话框
-                    if (mole.IsConfigStep)
+                    if (index >= 0 && index < group.Moles.Count)
                     {
-                        ShowConfigStepDialog(mole, index);
-                        return;
+                        // 左键点击只选中步骤，不改变复选框状态（已通过 CheckOnClick = false 实现）
+                        lstMoles.SelectedIndex = index;
                     }
-                    
-                    // 如果是跳转步骤，显示编辑对话框
-                    if (mole.IsJump)
+                    else
                     {
-                        ShowJumpStepEditDialog(mole, index);
-                        return;
+                        // 左键点击了空白处，关闭当前编辑窗口
+                        CloseCurrentEditDialog();
                     }
-                    
-                    // 如果是空击地鼠，显示自定义对话框
-                    if (mole.IsIdleClick)
-                    {
-                        ShowIdleClickEditDialog(mole, index);
-                        return;
-                    }
-                    
-                    // 创建自定义确认对话框，显示预览图（非模态）
-                    ShowMoleDeleteConfirmDialog(mole, index);
                 }
-                else
+                else if (e.Button == MouseButtons.Right)
                 {
-                    // 右键点击了空白处，关闭当前编辑窗口
-                    CloseCurrentEditDialog();
+                    if (index >= 0 && index < group.Moles.Count)
+                    {
+                        // 右键点击了某个步骤，先选中该项
+                        lstMoles.SelectedIndex = index;
+                        
+                        // 关闭当前编辑窗口并打开新的
+                        CloseCurrentEditDialog();
+                        
+                        var mole = group.Moles[index];
+                        
+                        // 如果是配置步骤，显示编辑对话框
+                        if (mole.IsConfigStep)
+                        {
+                            ShowConfigStepDialog(mole, index);
+                            return;
+                        }
+                        
+                        // 如果是跳转步骤，显示编辑对话框
+                        if (mole.IsJump)
+                        {
+                            ShowJumpStepEditDialog(mole, index);
+                            return;
+                        }
+                        
+                        // 如果是空击地鼠，显示自定义对话框
+                        if (mole.IsIdleClick)
+                        {
+                            ShowIdleClickEditDialog(mole, index);
+                            return;
+                        }
+                        
+                        // 创建自定义确认对话框，显示预览图（非模态）
+                        ShowMoleDeleteConfirmDialog(mole, index);
+                    }
+                    else
+                    {
+                        // 右键点击了空白处，关闭当前编辑窗口
+                        CloseCurrentEditDialog();
+                    }
                 }
             }
         }
@@ -3582,7 +4292,7 @@ namespace WindowInspector
             var form = new Form
             {
                 Text = "空击步骤设置",
-                Size = new Size(400, 250),
+                Size = new Size(400, 290),
                 StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -3630,10 +4340,19 @@ namespace WindowInspector
                 Parent = form
             };
             
+            // 变更点击位置按钮
+            var btnChangePosition = new Button
+            {
+                Text = "变更点击位置",
+                Location = new Point(20, 170),
+                Size = new Size(120, 30),
+                Parent = form
+            };
+            
             var btnSave = new Button
             {
                 Text = "保存",
-                Location = new Point(190, 170),
+                Location = new Point(280, 210),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -3641,9 +4360,47 @@ namespace WindowInspector
             var btnDelete = new Button
             {
                 Text = "删除",
-                Location = new Point(100, 170),
+                Location = new Point(190, 210),
                 Size = new Size(80, 30),
                 Parent = form
+            };
+            
+            // 变更点击位置按钮点击事件
+            btnChangePosition.Click += (s, e) =>
+            {
+                AppendLog("💤 请点击屏幕上的新位置...", LogType.Info);
+                
+                // 等待用户点击
+                Task.Run(async () =>
+                {
+                    await Task.Delay(200); // 给用户200ms准备时间
+                    
+                    // 等待鼠标左键点击
+                    while (true)
+                    {
+                        if ((WindowHelper.GetAsyncKeyState(WindowHelper.VK_LBUTTON) & 0x8000) != 0)
+                        {
+                            WindowHelper.GetCursorPos(out var pos);
+                            var newPoint = new Point(pos.X, pos.Y);
+                            
+                            // 更新空击位置
+                            idleMole.IdleClickPosition = newPoint;
+                            
+                            Invoke(new Action(() =>
+                            {
+                                AppendLog($"✅ 已更新空击位置: ({pos.X}, {pos.Y})", LogType.Success);
+                                RefreshCurrentMoleList();
+                                UpdateIdleClickLabel();
+                                SaveMoles();
+                                form.Close();
+                            }));
+                            
+                            break;
+                        }
+                        
+                        await Task.Delay(50);
+                    }
+                });
             };
             
             // 保存按钮点击事件
@@ -3942,14 +4699,13 @@ namespace WindowInspector
                 Parent = form
             };
 
-            // 鼠标滚动复选框
+            // 鼠标滚动复选框（独立，不受键盘按键复选框控制）
             var chkMouseScroll = new CheckBox
             {
                 Text = "鼠标滚动操作",
                 Location = new Point(20, 365),
                 Size = new Size(310, 25),
                 Checked = jumpMole.EnableMouseScroll,
-                Enabled = jumpMole.SendKeyPress,
                 Parent = form
             };
 
@@ -4010,6 +4766,64 @@ namespace WindowInspector
                 Parent = form
             };
 
+            // 分隔线
+            var separator2 = new Label
+            {
+                Text = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                Location = new Point(20, 535),
+                Size = new Size(310, 20),
+                ForeColor = Color.Gray,
+                Parent = form
+            };
+
+            // 执行顺序单选框（根据保存的值设置，如果都没选中则默认键盘先执行）
+            var radKeyPressFirst = new RadioButton
+            {
+                Text = "键盘按键先执行",
+                Location = new Point(20, 560),
+                Size = new Size(150, 25),
+                Checked = jumpMole.IsKeyPressExecuteFirst || (!jumpMole.IsKeyPressExecuteFirst && !jumpMole.IsMouseScrollExecuteFirst),
+                Parent = form
+            };
+
+            var radMouseScrollFirst = new RadioButton
+            {
+                Text = "鼠标滚动先执行",
+                Location = new Point(180, 560),
+                Size = new Size(150, 25),
+                Checked = jumpMole.IsMouseScrollExecuteFirst,
+                Parent = form
+            };
+
+            // 单选框互锁逻辑
+            radKeyPressFirst.CheckedChanged += (s, e) =>
+            {
+                if (radKeyPressFirst.Checked)
+                {
+                    radMouseScrollFirst.Checked = false;
+                }
+            };
+
+            radMouseScrollFirst.CheckedChanged += (s, e) =>
+            {
+                if (radMouseScrollFirst.Checked)
+                {
+                    radKeyPressFirst.Checked = false;
+                }
+            };
+
+            // 更新单选框激活状态的方法
+            void UpdateRadioButtonsState()
+            {
+                // 只有当两个复选框都选中时，才激活单选框
+                bool bothChecked = chkSendKeyPress.Checked && chkMouseScroll.Checked;
+                radKeyPressFirst.Enabled = bothChecked;
+                radMouseScrollFirst.Enabled = bothChecked;
+            }
+
+            // 初始化单选框状态
+            UpdateRadioButtonsState();
+
             // 复选框状态改变事件
             chkSendKeyPress.CheckedChanged += (s, e) =>
             {
@@ -4018,22 +4832,19 @@ namespace WindowInspector
                 txtKeyPress.Enabled = enabled;
                 labelWaitTime.Enabled = enabled;
                 txtWaitTime.Enabled = enabled;
-                chkMouseScroll.Enabled = enabled;
                 
-                // 如果禁用按键输入，同时禁用鼠标滚动
-                if (!enabled)
-                {
-                    chkMouseScroll.Checked = false;
-                }
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
                 
-                // 禁用/启用跳转相关控件
-                label1.Enabled = !enabled;
-                comboGroup.Enabled = !enabled;
-                label2.Enabled = !enabled;
-                comboStep.Enabled = !enabled;
+                // 更新单选框激活状态
+                UpdateRadioButtonsState();
             };
 
-            // 鼠标滚动复选框状态改变事件
+            // 鼠标滚动复选框状态改变事件（独立，不受键盘按键复选框控制）
             chkMouseScroll.CheckedChanged += (s, e) =>
             {
                 bool enabled = chkMouseScroll.Checked;
@@ -4043,7 +4854,24 @@ namespace WindowInspector
                 txtScrollCount.Enabled = enabled;
                 labelScrollWait.Enabled = enabled;
                 txtScrollWait.Enabled = enabled;
+                
+                // 禁用/启用跳转相关控件（只有当键盘按键或鼠标滚动任一选中时才禁用）
+                bool shouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+                label1.Enabled = !shouldDisableJump;
+                comboGroup.Enabled = !shouldDisableJump;
+                label2.Enabled = !shouldDisableJump;
+                comboStep.Enabled = !shouldDisableJump;
+                
+                // 更新单选框激活状态
+                UpdateRadioButtonsState();
             };
+            
+            // 初始化跳转UI的启用状态（根据复选框当前状态）
+            bool initialShouldDisableJump = chkSendKeyPress.Checked || chkMouseScroll.Checked;
+            label1.Enabled = !initialShouldDisableJump;
+            comboGroup.Enabled = !initialShouldDisableJump;
+            label2.Enabled = !initialShouldDisableJump;
+            comboStep.Enabled = !initialShouldDisableJump;
 
             // 按键录制逻辑
             string recordedKey = jumpMole.KeyPressDefinition;
@@ -4177,6 +5005,8 @@ namespace WindowInspector
                     jumpMole.ScrollUp = comboScrollDirection.SelectedIndex == 0;
                     jumpMole.ScrollCount = scrollCount;
                     jumpMole.ScrollWaitMs = scrollWaitMs;
+                    jumpMole.IsKeyPressExecuteFirst = radKeyPressFirst.Checked;
+                    jumpMole.IsMouseScrollExecuteFirst = radMouseScrollFirst.Checked;
                     jumpMole.Name = $"⌨️ 按键: {recordedKey}";
                     
                     SaveMoles();
@@ -4191,7 +5021,8 @@ namespace WindowInspector
                     if (chkMouseScroll.Checked)
                     {
                         var direction = comboScrollDirection.SelectedIndex == 0 ? "向上" : "向下";
-                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms)";
+                        var executeOrder = radKeyPressFirst.Checked ? "键盘先执行" : "鼠标先执行";
+                        logMsg += $" + 鼠标{direction}滚动{scrollCount}次 (延时 {scrollWaitMs}ms) [{executeOrder}]";
                     }
                     AppendLog(logMsg, LogType.Success);
                     form.Close();
@@ -5395,6 +6226,23 @@ namespace WindowInspector
             {
                 _currentMoleGroupIndex = tabMoleGroups.SelectedIndex;
                 UpdateIdleClickLabel();
+            }
+        }
+        
+        private void TabMoleGroups_Resize(object? sender, EventArgs e)
+        {
+            // 使用 Dock.Fill 后，CheckedListBox 会自动调整大小
+            // 只需要更新滚动条显示状态
+            foreach (TabPage tabPage in tabMoleGroups.TabPages)
+            {
+                foreach (Control ctrl in tabPage.Controls)
+                {
+                    if (ctrl is CheckedListBox lstMoles)
+                    {
+                        // 步骤数量大于35时必须出现滚动条
+                        lstMoles.ScrollAlwaysVisible = lstMoles.Items.Count > 35;
+                    }
+                }
             }
         }
         

@@ -11,6 +11,7 @@ namespace WindowInspector.Utils
         private readonly string _configsDir;
         private readonly string _lastConfigFile;
         private readonly string _windowPositionFile;
+        private readonly string _hotkeySettingsFile;
 
         public string ConfigsDirectory => _configsDir;
         public string ProgramDirectory => _programDir;
@@ -23,6 +24,7 @@ namespace WindowInspector.Utils
             _configsDir = Path.Combine(_programDir, "configs");
             _lastConfigFile = Path.Combine(_programDir, "last_config.json");
             _windowPositionFile = Path.Combine(_programDir, "window_position.json");
+            _hotkeySettingsFile = Path.Combine(_programDir, "hotkey_settings.json");
 
             // 确保目录存在
             if (!Directory.Exists(_programDir))
@@ -107,6 +109,32 @@ namespace WindowInspector.Utils
                 if (!File.Exists(_lastConfigFile))
                     return null;
                 return File.ReadAllText(_lastConfigFile);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public void SaveHotkeySettings(HotkeySettings settings)
+        {
+            try
+            {
+                var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
+                File.WriteAllText(_hotkeySettingsFile, json);
+            }
+            catch { }
+        }
+
+        public HotkeySettings? LoadHotkeySettings()
+        {
+            try
+            {
+                if (!File.Exists(_hotkeySettingsFile))
+                    return null;
+
+                var json = File.ReadAllText(_hotkeySettingsFile);
+                return JsonConvert.DeserializeObject<HotkeySettings>(json);
             }
             catch
             {

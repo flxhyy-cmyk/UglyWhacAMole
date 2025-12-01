@@ -180,15 +180,15 @@ namespace WindowInspector.Utils
                 case CheckedListBox clb:
                     clb.BackColor = colors.InputBackground;
                     clb.ForeColor = colors.InputForeground;
-                    clb.BorderStyle = BorderStyle.FixedSingle;
                     
-                    // 如果控件有 "CustomDraw" 标记，跳过主题绘制接管
+                    // 如果控件有 "CustomDraw" 标记，跳过主题绘制接管和 BorderStyle 修改
                     if (clb.Tag?.ToString() == "CustomDraw")
                     {
-                        // 只设置颜色，不接管绘制
+                        // 只设置颜色，不修改 BorderStyle 和绘制模式
                         break;
                     }
                     
+                    clb.BorderStyle = BorderStyle.FixedSingle;
                     // 启用自定义绘制以支持深色模式
                     clb.DrawMode = DrawMode.OwnerDrawFixed;
                     clb.DrawItem -= CheckedListBox_DrawItem; // 先移除避免重复

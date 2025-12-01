@@ -1,3 +1,4 @@
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -30,6 +31,7 @@ namespace WindowInspector
         private TabPage tabPageMain;
         private TabPage tabPageMole;
         private TabPage tabPageLoadSettings;
+        private TabPage tabPageHotkeySettings;
         private CheckBox chkMoleEnabled;
         private CheckBox chkAutoLoadGroups;
         private Button btnLoadSelectedGroups;
@@ -42,6 +44,7 @@ namespace WindowInspector
         private Button btnAddConfigStep;
         private Button btnBatchSelect;
         private Button btnAddJump;
+        private Button btnMoveStep;
         private Label lblIdleClickPos;
         private CheckedListBox lstMoles;
         private TabControl tabMoleGroups;
@@ -63,8 +66,8 @@ namespace WindowInspector
             this.Text = "文本框位置记录工具";
             this.ClientSize = new Size(504, 520);  // 默认高度520
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
+            this.FormBorderStyle = FormBorderStyle.Sizable;  // 允许鼠标拖拽调整窗口大小
+            this.MaximizeBox = true;
             this.Padding = new Padding(0);
 
             // 创建标签页控件
@@ -103,6 +106,15 @@ namespace WindowInspector
             tabPageLoadSettings = new TabPage
             {
                 Text = "显示设置",
+                Padding = new Padding(0),
+                Margin = new Padding(0),
+                Parent = tabMain
+            };
+
+            // 快捷键设置标签页
+            tabPageHotkeySettings = new TabPage
+            {
+                Text = "快捷键设置",
                 Padding = new Padding(0),
                 Margin = new Padding(0),
                 Parent = tabMain
@@ -273,6 +285,9 @@ namespace WindowInspector
             
             // 显示设置界面
             InitializeLoadSettingsTab();
+            
+            // 快捷键设置界面
+            InitializeHotkeySettingsTab();
         }
 
         private void InitializeMoleTab()
@@ -376,6 +391,17 @@ namespace WindowInspector
             };
             btnAddJump.Click += BtnAddJump_Click;
 
+            // 步骤移动按钮
+            btnMoveStep = new Button
+            {
+                Text = "↕",
+                Location = new Point(400, 65),
+                Size = new Size(40, 30),
+                Font = new Font("Arial", 14, FontStyle.Bold),
+                Parent = tabPageMole
+            };
+            btnMoveStep.Click += BtnMoveStep_Click;
+            
             // 地鼠列表标签页控件
             var lblMoles = new Label
             {
@@ -405,20 +431,29 @@ namespace WindowInspector
             btnRemoveMoleGroup.Click += BtnRemoveMoleGroup_Click;
 
             // 地鼠列表标签页
+            // 注意：TabControl 的 ItemSize.Height (25px) 会占用内部空间，需要在计算时考虑
+            // 底部保留1像素间距
             tabMoleGroups = new TabControl
             {
-                Location = new Point(0, 130),
-                Size = new Size(tabPageMole.ClientSize.Width, tabPageMole.ClientSize.Height - 130),
+                Location = new Point(1, 133),
+                Size = new Size(tabPageMole.ClientSize.Width - 2, Math.Max(tabPageMole.ClientSize.Height - 133 - 1, 100)),
                 Padding = new Point(0, 0),
                 Margin = new Padding(0),
                 SizeMode = TabSizeMode.Fixed,
                 ItemSize = new Size(80, 25),
                 Appearance = TabAppearance.Buttons,
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, // 移除 Bottom，手动控制高度
                 Parent = tabPageMole
             };
             tabMoleGroups.SelectedIndexChanged += TabMoleGroups_SelectedIndexChanged;
             tabMoleGroups.MouseDoubleClick += TabMoleGroups_MouseDoubleClick;
+            // 监听 Resize 事件，动态调整 CheckedListBox 的高度
+            tabMoleGroups.Resize += TabMoleGroups_Resize;
+            // 监听父容器 Resize 事件，手动调整 tabMoleGroups 高度以保持底部1像素间距
+            tabPageMole.Resize += (s, e) =>
+            {
+                tabMoleGroups.Height = tabPageMole.ClientSize.Height - 130 - 1;
+            };
         }
 
         private void InitializeLoadSettingsTab()
@@ -492,6 +527,205 @@ namespace WindowInspector
                 Parent = tabPageLoadSettings
             };
             lstMoleGroupsSelection.ItemCheck += LstMoleGroupsSelection_ItemCheck;
+        }
+
+        private TextBox txtHotkeyF2;
+        private TextBox txtHotkeyF3;
+        private TextBox txtHotkeyF4;
+        private TextBox txtHotkeyF6;
+        private TextBox txtHotkeyConfigText;
+        private TextBox txtHotkeyBatchSelect;
+        private TextBox txtHotkeyAddJump;
+
+        private void InitializeHotkeySettingsTab()
+        {
+            // 说明标签
+            var lblDescription = new Label
+            {
+                Text = "点击输入框后按下想要设置的快捷键，失去焦点时自动保存",
+                Location = new Point(20, 20),
+                Size = new Size(450, 25),
+                Font = new Font(Font.FontFamily, 9, FontStyle.Regular),
+                ForeColor = Color.Gray,
+                Parent = tabPageHotkeySettings
+            };
+
+            // F2功能
+            var lblF2 = new Label
+            {
+                Text = "填充文本:",
+                Location = new Point(20, 60),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyF2 = new TextBox
+            {
+                Name = "txtHotkeyF2",
+                Location = new Point(180, 58),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyF2.KeyDown += TxtHotkeyF2_KeyDown;
+            txtHotkeyF2.Enter += TxtHotkey_Enter;
+            txtHotkeyF2.Leave += TxtHotkey_Leave;
+
+            // F3功能
+            var lblF3 = new Label
+            {
+                Text = "打地鼠开关:",
+                Location = new Point(20, 100),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyF3 = new TextBox
+            {
+                Name = "txtHotkeyF3",
+                Location = new Point(180, 98),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyF3.KeyDown += TxtHotkeyF3_KeyDown;
+            txtHotkeyF3.Enter += TxtHotkey_Enter;
+            txtHotkeyF3.Leave += TxtHotkey_Leave;
+
+            // F4功能
+            var lblF4 = new Label
+            {
+                Text = "截图创建地鼠:",
+                Location = new Point(20, 140),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyF4 = new TextBox
+            {
+                Name = "txtHotkeyF4",
+                Location = new Point(180, 138),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyF4.KeyDown += TxtHotkeyF4_KeyDown;
+            txtHotkeyF4.Enter += TxtHotkey_Enter;
+            txtHotkeyF4.Leave += TxtHotkey_Leave;
+
+            // F6功能
+            var lblF6 = new Label
+            {
+                Text = "添加空击位置:",
+                Location = new Point(20, 180),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyF6 = new TextBox
+            {
+                Name = "txtHotkeyF6",
+                Location = new Point(180, 178),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyF6.KeyDown += TxtHotkeyF6_KeyDown;
+            txtHotkeyF6.Enter += TxtHotkey_Enter;
+            txtHotkeyF6.Leave += TxtHotkey_Leave;
+
+            // 分隔线
+            var lblSeparator = new Label
+            {
+                Text = "打地鼠功能快捷键:",
+                Location = new Point(20, 220),
+                Size = new Size(400, 20),
+                Font = new Font(Font.FontFamily, 9, FontStyle.Bold),
+                Parent = tabPageHotkeySettings
+            };
+
+            // 配置文本定义
+            var lblConfigText = new Label
+            {
+                Text = "配置文本定义:",
+                Location = new Point(20, 250),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyConfigText = new TextBox
+            {
+                Name = "txtHotkeyConfigText",
+                Location = new Point(180, 248),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyConfigText.KeyDown += TxtHotkeyConfigText_KeyDown;
+            txtHotkeyConfigText.Enter += TxtHotkey_Enter;
+            txtHotkeyConfigText.Leave += TxtHotkey_Leave;
+
+            // 批量启用/禁用
+            var lblBatchSelect = new Label
+            {
+                Text = "批量启用/禁用:",
+                Location = new Point(20, 290),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyBatchSelect = new TextBox
+            {
+                Name = "txtHotkeyBatchSelect",
+                Location = new Point(180, 288),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyBatchSelect.KeyDown += TxtHotkeyBatchSelect_KeyDown;
+            txtHotkeyBatchSelect.Enter += TxtHotkey_Enter;
+            txtHotkeyBatchSelect.Leave += TxtHotkey_Leave;
+
+            // 添加跳转/键鼠
+            var lblAddJump = new Label
+            {
+                Text = "添加跳转/键鼠:",
+                Location = new Point(20, 330),
+                Size = new Size(150, 25),
+                Parent = tabPageHotkeySettings
+            };
+
+            txtHotkeyAddJump = new TextBox
+            {
+                Name = "txtHotkeyAddJump",
+                Location = new Point(180, 328),
+                Size = new Size(250, 25),
+                ReadOnly = true,
+                Parent = tabPageHotkeySettings
+            };
+            txtHotkeyAddJump.KeyDown += TxtHotkeyAddJump_KeyDown;
+            txtHotkeyAddJump.Enter += TxtHotkey_Enter;
+            txtHotkeyAddJump.Leave += TxtHotkey_Leave;
+
+            // 提示信息
+            var lblHint = new Label
+            {
+                Text = "提示: 修改快捷键后需要重启程序才能生效",
+                Location = new Point(20, 370),
+                Size = new Size(400, 20),
+                ForeColor = Color.Orange,
+                Parent = tabPageHotkeySettings
+            };
+
+            // 重置按钮
+            var btnResetHotkeys = new Button
+            {
+                Text = "恢复默认快捷键",
+                Location = new Point(20, 400),
+                Size = new Size(150, 30),
+                Parent = tabPageHotkeySettings
+            };
+            btnResetHotkeys.Click += BtnResetHotkeys_Click;
         }
 
     }

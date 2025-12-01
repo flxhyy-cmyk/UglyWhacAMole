@@ -57,10 +57,12 @@ namespace WindowInspector.Services
             LogMessage?.Invoke(this, $"⚙️ 全图匹配模式: {(enabled ? "已启用" : "已禁用")}");
         }
         
+        private string? _currentGroupName; // 当前分组名称
+        
         /// <summary>
         /// 开始打地鼠
         /// </summary>
-        public void Start(List<MoleItem> moles, List<MoleGroup>? allMoleGroups = null)
+        public void Start(List<MoleItem> moles, List<MoleGroup>? allMoleGroups = null, string? groupName = null)
         {
             if (_isRunning)
                 return;
@@ -68,6 +70,7 @@ namespace WindowInspector.Services
             _isRunning = true;
             _cts = new CancellationTokenSource();
             _allMoleGroups = allMoleGroups; // 保存所有分组
+            _currentGroupName = groupName; // 保存当前分组名称
             
             Task.Run(() => HuntingLoop(moles, _cts.Token));
             LogMessage?.Invoke(this, "🎯 打地鼠已启动 (使用 Emgu.CV 原生识图)");
@@ -189,8 +192,7 @@ namespace WindowInspector.Services
                     
                     // 点击匹配项
                     ClickAt(match.Result.Center);
-                    MoleFound?.Invoke(this, new MoleFoundEventArgs(match.Mole.Name, match.Result.Center));
-                    LogMessage?.Invoke(this, $"🎯 [{match.Mole.Name}] 点击 ({match.Result.Center.X},{match.Result.Center.Y}) | 置信度:{match.Confidence:F2} (阈值:{match.Mole.SimilarityThreshold:F2})");
+                    LogMessage?.Invoke(this, $"🎯 [{match.Mole.Name}] 点击 ({match.Result.Center.X},{match.Result.Center.Y})");
                     
                     // 点击间隔
                     await Task.Delay(100, token);
@@ -245,6 +247,7 @@ namespace WindowInspector.Services
         private async Task ExecuteMoleSequenceInternal(List<MoleItem> moles, CancellationToken token, int totalSteps, int startIndex = 0)
         {
             int currentStep = 0;
+            string groupPrefix = string.IsNullOrEmpty(_currentGroupName) ? "" : $"[{_currentGroupName}]";
             
             // 按列表顺序逐个检查地鼠
             for (int i = startIndex; i < moles.Count; i++)
@@ -255,10 +258,12 @@ namespace WindowInspector.Services
                 if (!mole.IsEnabled || token.IsCancellationRequested)
                     continue;
                 
+                string stepPrefix = $"{groupPrefix}[{currentStep}/{totalSteps}]";
+                
                 // 如果是配置步骤
                 if (mole.IsConfigStep)
                 {
-                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⚙️ 配置步骤: {mole.Name}");
+                    LogMessage?.Invoke(this, $"{stepPrefix} ⚙️ 配置步骤: {mole.Name}");
                     
                     // 执行配置切换
                     if (mole.SwitchConfig)
@@ -266,17 +271,17 @@ namespace WindowInspector.Services
                         try
                         {
                             OnConfigSwitchRequested?.Invoke(this, mole.TargetConfigName);
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 已切换配置: {mole.TargetConfigName}");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ✅ 已切换配置: {mole.TargetConfigName}");
                             
                             if (mole.ConfigSwitchWaitMs > 0)
                             {
                                 await Task.Delay(mole.ConfigSwitchWaitMs, token);
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.ConfigSwitchWaitMs}ms");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 已等待 {mole.ConfigSwitchWaitMs}ms");
                             }
                         }
                         catch (Exception ex)
                         {
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 配置切换失败: {ex.Message}");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ❌ 配置切换失败: {ex.Message}");
                         }
                     }
                     
@@ -286,17 +291,17 @@ namespace WindowInspector.Services
                         try
                         {
                             OnTextContentSwitchRequested?.Invoke(this, mole.TargetTextName);
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 已切换填充内容: {mole.TargetTextName}");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ✅ 已切换填充内容: {mole.TargetTextName}");
                             
                             if (mole.TextSwitchWaitMs > 0)
                             {
                                 await Task.Delay(mole.TextSwitchWaitMs, token);
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.TextSwitchWaitMs}ms");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 已等待 {mole.TextSwitchWaitMs}ms");
                             }
                         }
                         catch (Exception ex)
                         {
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 填充内容切换失败: {ex.Message}");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ❌ 填充内容切换失败: {ex.Message}");
                         }
                     }
                     
@@ -311,53 +316,154 @@ namespace WindowInspector.Services
                     if (mole.SendKeyPress)
                     {
                         // 键盘按键输入模式
-                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⌨️ 发送按键: {mole.KeyPressDefinition}");
+                        bool hasKeyPress = !string.IsNullOrEmpty(mole.KeyPressDefinition);
+                        bool hasMouseScroll = mole.EnableMouseScroll;
                         
-                        try
+                        // 如果键盘按键先执行
+                        if (hasKeyPress && mole.IsKeyPressExecuteFirst)
                         {
-                            SendKeyPress(mole.KeyPressDefinition);
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 按键已发送");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ⌨️ 发送按键: {mole.KeyPressDefinition}");
                             
-                            // 等待指定时间
-                            if (mole.KeyPressWaitMs > 0)
+                            try
                             {
-                                await Task.Delay(mole.KeyPressWaitMs, token);
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 已等待 {mole.KeyPressWaitMs}ms");
+                                SendKeyPress(mole.KeyPressDefinition);
+                                LogMessage?.Invoke(this, $"{stepPrefix} ✅ 按键已发送");
+                                
+                                // 等待指定时间
+                                if (mole.KeyPressWaitMs > 0)
+                                {
+                                    await Task.Delay(mole.KeyPressWaitMs, token);
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 已等待 {mole.KeyPressWaitMs}ms");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogMessage?.Invoke(this, $"{stepPrefix} ❌ 按键发送失败: {ex.Message}");
                             }
                             
-                            // 如果启用了鼠标滚动操作
-                            if (mole.EnableMouseScroll)
+                            // 然后执行鼠标滚动
+                            if (hasMouseScroll)
                             {
                                 var direction = mole.ScrollUp ? "向上" : "向下";
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🖱️ 鼠标{direction}滚动 {mole.ScrollCount} 次");
+                                LogMessage?.Invoke(this, $"{stepPrefix} 🖱️ 鼠标{direction}滚动 {mole.ScrollCount} 次");
                                 
                                 try
                                 {
                                     PerformMouseScroll(mole.ScrollUp, mole.ScrollCount);
-                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 滚动完成");
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ✅ 滚动完成");
                                     
                                     // 滚动后等待
                                     if (mole.ScrollWaitMs > 0)
                                     {
                                         await Task.Delay(mole.ScrollWaitMs, token);
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 滚动后已等待 {mole.ScrollWaitMs}ms");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 滚动后已等待 {mole.ScrollWaitMs}ms");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 鼠标滚动失败: {ex.Message}");
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ❌ 鼠标滚动失败: {ex.Message}");
                                 }
                             }
                         }
-                        catch (Exception ex)
+                        // 如果鼠标滚动先执行
+                        else if (hasMouseScroll && mole.IsMouseScrollExecuteFirst)
                         {
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ❌ 按键发送失败: {ex.Message}");
+                            var direction = mole.ScrollUp ? "向上" : "向下";
+                            LogMessage?.Invoke(this, $"{stepPrefix} 🖱️ 鼠标{direction}滚动 {mole.ScrollCount} 次");
+                            
+                            try
+                            {
+                                PerformMouseScroll(mole.ScrollUp, mole.ScrollCount);
+                                LogMessage?.Invoke(this, $"{stepPrefix} ✅ 滚动完成");
+                                
+                                // 滚动后等待
+                                if (mole.ScrollWaitMs > 0)
+                                {
+                                    await Task.Delay(mole.ScrollWaitMs, token);
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 滚动后已等待 {mole.ScrollWaitMs}ms");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogMessage?.Invoke(this, $"{stepPrefix} ❌ 鼠标滚动失败: {ex.Message}");
+                            }
+                            
+                            // 然后执行键盘按键
+                            if (hasKeyPress)
+                            {
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⌨️ 发送按键: {mole.KeyPressDefinition}");
+                                
+                                try
+                                {
+                                    SendKeyPress(mole.KeyPressDefinition);
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ✅ 按键已发送");
+                                    
+                                    // 等待指定时间
+                                    if (mole.KeyPressWaitMs > 0)
+                                    {
+                                        await Task.Delay(mole.KeyPressWaitMs, token);
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 已等待 {mole.KeyPressWaitMs}ms");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ❌ 按键发送失败: {ex.Message}");
+                                }
+                            }
+                        }
+                        // 默认情况：只执行已启用的操作
+                        else
+                        {
+                            if (hasKeyPress)
+                            {
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⌨️ 发送按键: {mole.KeyPressDefinition}");
+                                
+                                try
+                                {
+                                    SendKeyPress(mole.KeyPressDefinition);
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ✅ 按键已发送");
+                                    
+                                    // 等待指定时间
+                                    if (mole.KeyPressWaitMs > 0)
+                                    {
+                                        await Task.Delay(mole.KeyPressWaitMs, token);
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 已等待 {mole.KeyPressWaitMs}ms");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ❌ 按键发送失败: {ex.Message}");
+                                }
+                            }
+                            
+                            if (hasMouseScroll)
+                            {
+                                var direction = mole.ScrollUp ? "向上" : "向下";
+                                LogMessage?.Invoke(this, $"{stepPrefix} 🖱️ 鼠标{direction}滚动 {mole.ScrollCount} 次");
+                                
+                                try
+                                {
+                                    PerformMouseScroll(mole.ScrollUp, mole.ScrollCount);
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ✅ 滚动完成");
+                                    
+                                    // 滚动后等待
+                                    if (mole.ScrollWaitMs > 0)
+                                    {
+                                        await Task.Delay(mole.ScrollWaitMs, token);
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 滚动后已等待 {mole.ScrollWaitMs}ms");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogMessage?.Invoke(this, $"{stepPrefix} ❌ 鼠标滚动失败: {ex.Message}");
+                                }
+                            }
                         }
                     }
                     else
                     {
                         // 跳转模式
-                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔗 跳转到 {mole.JumpTargetGroup}");
+                        LogMessage?.Invoke(this, $"{stepPrefix} 🔗 跳转到 {mole.JumpTargetGroup}");
                         
                         // 查找目标分组
                         if (_allMoleGroups != null)
@@ -405,14 +511,14 @@ namespace WindowInspector.Services
                     // 检查是否设置了停止打地鼠
                     if (mole.StopHunting)
                     {
-                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏹️ 执行到停止步骤，打地鼠已停止");
+                        LogMessage?.Invoke(this, $"{stepPrefix} ⏹️ 执行到停止步骤，打地鼠已停止");
                         Stop(); // 停止打地鼠
                         return; // 退出执行
                     }
                     
                     // 执行一次空击
                     ClickAt(mole.IdleClickPosition.Value);
-                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 空击地鼠打击 ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})");
+                    LogMessage?.Invoke(this, $"{stepPrefix} 💤 空击 ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})");
                     // 跳到下一个地鼠
                     await Task.Delay(50, token);
                     continue;
@@ -424,7 +530,7 @@ namespace WindowInspector.Services
                     // 如果启用了"持续等待直到出现"
                     if (mole.WaitUntilAppear)
                     {
-                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏳ 等待图像出现: {mole.Name}");
+                        LogMessage?.Invoke(this, $"{stepPrefix} ⏳ 等待图像出现: {mole.Name}");
                         
                         ImageMatchResult? matchResult = null;
                         int waitCount = 0;
@@ -437,14 +543,13 @@ namespace WindowInspector.Services
                             if (matchResult != null && matchResult.Found)
                             {
                                 // 找到了，退出等待循环
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已出现，匹配阈值:{matchResult.Confidence:F2} (等待了 {waitCount} 次扫描)");
                                 break;
                             }
                             
                             waitCount++;
                             if (waitCount % 10 == 0)
                             {
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏳ 继续等待... (已扫描 {waitCount} 次)");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏳ 继续等待... (已扫描 {waitCount} 次)");
                             }
                             
                             // 等待一小段时间后再次扫描
@@ -455,8 +560,8 @@ namespace WindowInspector.Services
                         if (matchResult != null && matchResult.Found)
                         {
                             ClickAt(matchResult.Center);
-                            MoleFound?.Invoke(this, new MoleFoundEventArgs(mole.Name, matchResult.Center));
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🎯 截图地鼠打击成功 ({matchResult.Center.X}, {matchResult.Center.Y}) | 置信度:{matchResult.Confidence:F2} (阈值:{mole.SimilarityThreshold:F2})");
+                            string scanInfo = waitCount > 0 ? $"（{waitCount}次扫描）" : "";
+                            LogMessage?.Invoke(this, $"{stepPrefix} 🎯 {scanInfo}[{mole.Name}] 出现，击中 ({matchResult.Center.X}, {matchResult.Center.Y})");
                             
                             // 如果启用了"持续点击直到消失"
                             if (mole.ClickUntilDisappear)
@@ -475,12 +580,12 @@ namespace WindowInspector.Services
                                         // 目标仍然存在，继续点击
                                         clickCount++;
                                         ClickAt(recheckResult.Center);
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔄 持续点击第 {clickCount} 次 ({recheckResult.Center.X}, {recheckResult.Center.Y}) | 置信度:{recheckResult.Confidence:F2}");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} 🔄 持续点击第 {clickCount} 次 ({recheckResult.Center.X}, {recheckResult.Center.Y})");
                                     }
                                     else
                                     {
                                         // 目标已消失，退出循环
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已消失，共点击 {clickCount} 次");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ✅ 图像已消失，共点击 {clickCount} 次");
                                         break;
                                     }
                                 }
@@ -489,7 +594,7 @@ namespace WindowInspector.Services
                             // 如果启用了"点击后等待"
                             if (mole.WaitAfterClick && mole.WaitAfterClickMs > 0)
                             {
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 等待 {mole.WaitAfterClickMs} ms...");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 等待 {mole.WaitAfterClickMs} ms...");
                                 await Task.Delay(mole.WaitAfterClickMs, token);
                             }
                         }
@@ -498,14 +603,14 @@ namespace WindowInspector.Services
                     {
                         // 正常模式：扫描一次（或带超时的等待模式）
                         ImageMatchResult? matchResult = null;
+                        int scanCount = 0;
                         
                         // 如果启用了"等待超时后返回上一步"
                         if (mole.ReturnToPreviousOnTimeout && mole.TimeoutMs > 0)
                         {
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏳ 等待图像出现（超时: {mole.TimeoutMs}ms）: {mole.Name}");
+                            LogMessage?.Invoke(this, $"{stepPrefix} ⏳ 等待图像出现（超时: {mole.TimeoutMs}ms）: {mole.Name}");
                             
                             var startTime = DateTime.Now;
-                            int scanCount = 0;
                             
                             // 在超时时间内持续扫描
                             while (!token.IsCancellationRequested)
@@ -516,7 +621,6 @@ namespace WindowInspector.Services
                                 if (matchResult != null && matchResult.Found)
                                 {
                                     // 找到了，退出等待循环
-                                    LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已出现，匹配阈值:{matchResult.Confidence:F2} (扫描了 {scanCount} 次)");
                                     break;
                                 }
                                 
@@ -527,7 +631,7 @@ namespace WindowInspector.Services
                                     // 超时了，返回上一步
                                     if (i > startIndex)
                                     {
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏰ 等待超时（{mole.TimeoutMs}ms），返回上一个步骤");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏰ 等待超时（{mole.TimeoutMs}ms），返回上一个步骤");
                                         i = i - 2; // -2 是因为循环会 +1，所以实际是回到上一步
                                         currentStep--; // 步骤计数也要回退
                                         await Task.Delay(50, token);
@@ -536,7 +640,7 @@ namespace WindowInspector.Services
                                     else
                                     {
                                         // 已经是第一步，无法返回上一步
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏰ 等待超时（{mole.TimeoutMs}ms），已是第一步，跳过");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ⏰ 等待超时（{mole.TimeoutMs}ms），已是第一步，跳过");
                                         matchResult = null; // 确保matchResult为null，后续会跳过
                                         break;
                                     }
@@ -563,8 +667,8 @@ namespace WindowInspector.Services
                         {
                             // 找到地鼠，点击中心点
                             ClickAt(matchResult.Center);
-                            MoleFound?.Invoke(this, new MoleFoundEventArgs(mole.Name, matchResult.Center));
-                            LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🎯 截图地鼠打击成功 ({matchResult.Center.X}, {matchResult.Center.Y}) | 置信度:{matchResult.Confidence:F2} (阈值:{mole.SimilarityThreshold:F2})");
+                            string scanInfo = scanCount > 0 ? $"（{scanCount}次扫描）" : "";
+                            LogMessage?.Invoke(this, $"{stepPrefix} 🎯 {scanInfo}[{mole.Name}] 出现，击中 ({matchResult.Center.X}, {matchResult.Center.Y})");
                             
                             // 如果启用了"持续点击直到消失"（针对当前地鼠）
                             if (mole.ClickUntilDisappear)
@@ -583,12 +687,12 @@ namespace WindowInspector.Services
                                         // 目标仍然存在，继续点击
                                         clickCount++;
                                         ClickAt(recheckResult.Center);
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] 🔄 持续点击第 {clickCount} 次 ({recheckResult.Center.X}, {recheckResult.Center.Y}) | 置信度:{recheckResult.Confidence:F2}");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} 🔄 持续点击第 {clickCount} 次 ({recheckResult.Center.X}, {recheckResult.Center.Y})");
                                     }
                                     else
                                     {
                                         // 目标已消失，退出循环
-                                        LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ✅ 图像已消失，共点击 {clickCount} 次");
+                                        LogMessage?.Invoke(this, $"{stepPrefix} ✅ 图像已消失，共点击 {clickCount} 次");
                                         break;
                                     }
                                 }
@@ -622,7 +726,7 @@ namespace WindowInspector.Services
                             // 如果启用了"点击后等待"
                             if (mole.WaitAfterClick && mole.WaitAfterClickMs > 0)
                             {
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏱️ 等待 {mole.WaitAfterClickMs} ms...");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏱️ 等待 {mole.WaitAfterClickMs} ms...");
                                 await Task.Delay(mole.WaitAfterClickMs, token);
                             }
                         }
@@ -632,7 +736,7 @@ namespace WindowInspector.Services
                             if (mole.JumpToPreviousOnFail && i > startIndex)
                             {
                                 // 启用了"识别失败跳转到上一步"，且不是第一步
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⚠️ 截图地鼠未找到，跳转到上一个步骤");
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⚠️ [{mole.Name}] 未找到，跳转到上一个步骤");
                                 i = i - 2; // -2 是因为循环会 +1，所以实际是回到上一步
                                 currentStep--; // 步骤计数也要回退
                                 await Task.Delay(50, token);
@@ -641,8 +745,8 @@ namespace WindowInspector.Services
                             else
                             {
                                 // 未找到地鼠，跳过此步骤（默认行为）
-                                string confidenceInfo = matchResult != null ? $" | 最高置信度:{matchResult.Confidence:F2} (阈值:{mole.SimilarityThreshold:F2})" : "";
-                                LogMessage?.Invoke(this, $"[{currentStep}/{totalSteps}] ⏭️ 截图地鼠未找到 (跳过){confidenceInfo}");
+                                string confidenceInfo = matchResult != null ? $" (实际匹配 {matchResult.Confidence:F2})" : "";
+                                LogMessage?.Invoke(this, $"{stepPrefix} ⏭️ [{mole.Name}] 未找到 (跳过){confidenceInfo}");
                             }
                         }
                     }

@@ -41,6 +41,8 @@ namespace WindowInspector.Models
         public int TextSwitchWaitMs { get; set; } = 100; // 内容切换后等待时间（毫秒）
         public bool ReturnToPreviousOnTimeout { get; set; } = false; // 等待超时后返回上一个步骤
         public int TimeoutMs { get; set; } = 5000; // 超时时间（毫秒），默认5000ms
+        public bool IsKeyPressExecuteFirst { get; set; } = false; // 键盘按键是否先执行
+        public bool IsMouseScrollExecuteFirst { get; set; } = false; // 鼠标滚动是否先执行
     }
 
     /// <summary>
