@@ -4292,7 +4292,7 @@ namespace WindowInspector
             var form = new Form
             {
                 Text = "空击步骤设置",
-                Size = new Size(400, 290),
+                Size = new Size(400, 350),
                 StartPosition = FormStartPosition.Manual,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -4320,11 +4320,38 @@ namespace WindowInspector
                 Parent = form
             };
             
+            // 空击次数设置
+            var lblClickCount = new Label
+            {
+                Text = "空击次数:",
+                Location = new Point(20, 85),
+                Size = new Size(80, 20),
+                Parent = form
+            };
+            
+            var txtClickCount = new TextBox
+            {
+                Text = idleMole.IdleClickCount.ToString(),
+                Location = new Point(110, 82),
+                Size = new Size(80, 25),
+                Parent = form
+            };
+            
+            var lblClickCountHint = new Label
+            {
+                Text = "设置该坐标的点击次数（默认1次）",
+                Location = new Point(200, 85),
+                Size = new Size(180, 20),
+                ForeColor = Color.Gray,
+                Font = new Font(Font.FontFamily, 8),
+                Parent = form
+            };
+            
             // 停止打地鼠复选框
             var chkStopHunting = new CheckBox
             {
                 Text = "执行到此步骤时停止打地鼠",
-                Location = new Point(20, 90),
+                Location = new Point(20, 125),
                 Size = new Size(350, 25),
                 Checked = idleMole.StopHunting,
                 Parent = form
@@ -4333,7 +4360,7 @@ namespace WindowInspector
             var lblHint = new Label
             {
                 Text = "选中后，执行到此步骤时会自动停止打地鼠，不执行点击",
-                Location = new Point(40, 115),
+                Location = new Point(40, 150),
                 Size = new Size(330, 40),
                 ForeColor = Color.Gray,
                 Font = new Font(Font.FontFamily, 8),
@@ -4344,7 +4371,7 @@ namespace WindowInspector
             var btnChangePosition = new Button
             {
                 Text = "变更点击位置",
-                Location = new Point(20, 170),
+                Location = new Point(20, 205),
                 Size = new Size(120, 30),
                 Parent = form
             };
@@ -4352,7 +4379,7 @@ namespace WindowInspector
             var btnSave = new Button
             {
                 Text = "保存",
-                Location = new Point(280, 210),
+                Location = new Point(280, 270),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -4360,7 +4387,7 @@ namespace WindowInspector
             var btnDelete = new Button
             {
                 Text = "删除",
-                Location = new Point(190, 210),
+                Location = new Point(190, 270),
                 Size = new Size(80, 30),
                 Parent = form
             };
@@ -4406,9 +4433,20 @@ namespace WindowInspector
             // 保存按钮点击事件
             btnSave.Click += (s, e) =>
             {
+                // 验证并保存空击次数
+                if (int.TryParse(txtClickCount.Text, out int clickCount) && clickCount > 0)
+                {
+                    idleMole.IdleClickCount = clickCount;
+                }
+                else
+                {
+                    MessageBox.Show("空击次数必须是大于0的整数", "输入错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                
                 idleMole.StopHunting = chkStopHunting.Checked;
                 SaveMoles();
-                AppendLog($"✅ 已更新空击步骤设置: {idleMole.Name}", LogType.Success);
+                AppendLog($"✅ 已更新空击步骤设置: {idleMole.Name} (点击{clickCount}次)", LogType.Success);
                 form.Close();
             };
             

@@ -15,6 +15,7 @@ namespace WindowInspector.Models
         public DateTime CreatedTime { get; set; } = DateTime.Now;
         public bool IsIdleClick { get; set; } = false; // 是否为空击位置
         public Point? IdleClickPosition { get; set; } = null; // 空击坐标
+        public int IdleClickCount { get; set; } = 1; // 空击次数，默认1次
         public double SimilarityThreshold { get; set; } = 0.85; // 匹配阈值（0-1），默认0.85
         public bool IsJump { get; set; } = false; // 是否为跳转步骤
         public string JumpTargetGroup { get; set; } = ""; // 跳转目标分组名称

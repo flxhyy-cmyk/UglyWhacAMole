@@ -516,9 +516,30 @@ namespace WindowInspector.Services
                         return; // 退出执行
                     }
                     
-                    // 执行一次空击
-                    ClickAt(mole.IdleClickPosition.Value);
-                    LogMessage?.Invoke(this, $"{stepPrefix} 💤 空击 ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})");
+                    // 执行指定次数的空击
+                    int clickCount = mole.IdleClickCount > 0 ? mole.IdleClickCount : 1;
+                    for (int clickIndex = 0; clickIndex < clickCount; clickIndex++)
+                    {
+                        if (token.IsCancellationRequested) break;
+                        
+                        ClickAt(mole.IdleClickPosition.Value);
+                        
+                        if (clickCount > 1)
+                        {
+                            LogMessage?.Invoke(this, $"{stepPrefix} 💤 空击 ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y}) [{clickIndex + 1}/{clickCount}]");
+                        }
+                        else
+                        {
+                            LogMessage?.Invoke(this, $"{stepPrefix} 💤 空击 ({mole.IdleClickPosition.Value.X}, {mole.IdleClickPosition.Value.Y})");
+                        }
+                        
+                        // 多次点击之间添加短暂延迟
+                        if (clickIndex < clickCount - 1)
+                        {
+                            await Task.Delay(50, token);
+                        }
+                    }
+                    
                     // 跳到下一个地鼠
                     await Task.Delay(50, token);
                     continue;
